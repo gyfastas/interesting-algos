@@ -7,6 +7,7 @@
 | # | 题目 | 类型 | 难度 |
 |---|------|------|------|
 | 001 | [马与4×4棋盘](./algorithms/horse-4x4-chessboard/) | 马尔可夫链、模拟 | ⭐⭐⭐ |
+| 002 | [LLM Beam Search](./algorithms/llm-beam-search/) | 搜索算法、解码策略 | ⭐⭐ |
 
 ## 目录结构
 

@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>LLM Beam Search 动画</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'SF Pro Display', -apple-system, 'Segoe UI', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+  gap: 20px;
+}
+
+h1 {
+  font-size: 1.6em;
+  font-weight: 700;
+  background: linear-gradient(135deg, #58a6ff, #3fb950);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle { color: #8b949e; font-size: 0.9em; }
+
+/* ── Tab ── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: #161b22;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  width: 100%;
+  max-width: 760px;
+}
+.tab {
+  flex: 1; padding: 8px; border-radius: 6px; border: none;
+  cursor: pointer; font-size: 0.85em; font-weight: 500;
+  background: transparent; color: #8b949e; transition: all 0.2s;
+}
+.tab.active { background: #21262d; color: #e6edf3; }
+
+/* ── 主布局 ── */
+.page { width: 100%; max-width: 960px; display: none; }
+.page.active { display: flex; flex-direction: column; gap: 16px; align-items: center; }
+
+/* ── SVG 树画布 ── */
+.tree-canvas-wrap {
+  width: 100%;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+}
+
+svg.tree { width: 100%; display: block; }
+
+/* 节点 */
+.node-circle {
+  r: 28;
+  stroke-width: 2.5;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+.node-token {
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.node-prob {
+  font-size: 10px;
+  text-anchor: middle;
+  dominant-baseline: central;
+  fill: #8b949e;
+  pointer-events: none;
+}
+
+/* 状态颜色 */
+.state-root    { fill: #1a3a5c; stroke: #58a6ff; }
+.state-active  { fill: #1a4a2e; stroke: #3fb950; }
+.state-beam    { fill: #2a1a5c; stroke: #bc8cff; animation: glow-beam 1.5s infinite; }
+.state-pruned  { fill: #21262d; stroke: #30363d; opacity: 0.4; }
+.state-winner  { fill: #2a4a1a; stroke: #3fb950; animation: glow-win 1.5s infinite; }
+.state-greedy  { fill: #3a1a1a; stroke: #f85149; }
+.state-pending { fill: #1a2233; stroke: #444c56; }
+.state-eos     { fill: #1a3a5c; stroke: #58a6ff; opacity: 0.8; }
+
+@keyframes glow-beam {
+  0%,100% { filter: drop-shadow(0 0 4px rgba(188,140,255,0.5)); }
+  50% { filter: drop-shadow(0 0 12px rgba(188,140,255,0.9)); }
+}
+@keyframes glow-win {
+  0%,100% { filter: drop-shadow(0 0 4px rgba(63,185,80,0.5)); }
+  50% { filter: drop-shadow(0 0 16px rgba(63,185,80,0.9)); }
+}
+
+/* 边 */
+.edge {
+  stroke-width: 2;
+  fill: none;
+  transition: all 0.4s;
+}
+.edge-active  { stroke: #444c56; }
+.edge-beam    { stroke: #bc8cff; stroke-width: 2.5; }
+.edge-pruned  { stroke: #21262d; stroke-dasharray: 4,4; opacity: 0.3; }
+.edge-winner  { stroke: #3fb950; stroke-width: 3; }
+.edge-greedy  { stroke: #f85149; stroke-width: 2.5; }
+.edge-label {
+  font-size: 10px; fill: #8b949e;
+  text-anchor: middle;
+}
+.edge-label-beam { fill: #bc8cff; font-weight: 600; }
+.edge-label-winner { fill: #3fb950; font-weight: 600; }
+.edge-label-greedy { fill: #f85149; font-weight: 600; }
+
+/* ── 控制面板 ── */
+.control-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button {
+  padding: 9px 20px;
+  border-radius: 7px;
+  border: 1px solid #30363d;
+  cursor: pointer;
+  font-size: 0.85em;
+  font-weight: 500;
+  background: #21262d;
+  color: #e6edf3;
+  transition: all 0.2s;
+}
+button:hover { background: #30363d; }
+button.primary {
+  background: linear-gradient(135deg, #1a3a5c, #0f3460);
+  border-color: #58a6ff; color: #58a6ff;
+}
+button.primary:hover { background: linear-gradient(135deg, #2a4a6c, #1f4470); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Beam Width 选择 ── */
+.beam-selector {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.85em; color: #8b949e;
+}
+.k-btn {
+  width: 36px; height: 36px; padding: 0;
+  border-radius: 50%; font-weight: 700; font-size: 0.95em;
+}
+.k-btn.selected {
+  background: linear-gradient(135deg, #1a3a5c, #0f3460);
+  border-color: #58a6ff; color: #58a6ff;
+}
+
+/* ── 步骤信息 ── */
+.step-info {
+  width: 100%;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 16px 20px;
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.step-badge {
+  font-size: 2em;
+  font-weight: 800;
+  color: #58a6ff;
+  line-height: 1;
+}
+.step-detail {
+  flex: 1;
+  min-width: 200px;
+}
+.step-title { font-weight: 600; margin-bottom: 6px; }
+.step-desc { font-size: 0.85em; color: #8b949e; line-height: 1.6; }
+
+.beam-list {
+  display: flex; flex-direction: column; gap: 4px; min-width: 200px;
+}
+.beam-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.82em;
+  background: #0d1117;
+  border: 1px solid #21262d;
+}
+.beam-item.winner { border-color: #3fb950; }
+.beam-item.greedy-path { border-color: #f85149; }
+.beam-seq { color: #e6edf3; font-weight: 600; }
+.beam-score { color: #8b949e; margin-left: auto; font-family: monospace; }
+
+/* ── 对比面板 ── */
+.compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  width: 100%;
+}
+.compare-box {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 20px;
+}
+.compare-box.winner-box { border-color: #3fb950; }
+.compare-box.loser-box  { border-color: #f85149; }
+
+.compare-label { font-size: 0.8em; color: #8b949e; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+.compare-seq { font-size: 1.3em; font-weight: 700; margin-bottom: 8px; }
+.compare-prob { font-size: 0.9em; color: #8b949e; }
+.compare-prob span { color: #e6edf3; font-weight: 600; }
+.prob-bar { height: 8px; border-radius: 4px; margin-top: 10px; }
+
+/* ── Page 2: 候选池动画 ── */
+.candidates-view {
+  width: 100%;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 16px;
+  min-height: 300px;
+}
+
+.step-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 12px;
+}
+.step-title-main { font-weight: 600; color: #e6edf3; }
+.step-subtitle { font-size: 0.8em; color: #8b949e; }
+
+.candidates-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+
+.cand-card {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  font-size: 0.82em;
+  transition: all 0.4s;
+  position: relative;
+  min-width: 120px;
+}
+.cand-card.kept {
+  border-color: #bc8cff;
+  background: #1a0a3a;
+}
+.cand-card.pruned-card {
+  opacity: 0.3;
+  border-style: dashed;
+}
+.cand-card.winner-card {
+  border-color: #3fb950;
+  background: #0d3a1a;
+  box-shadow: 0 0 12px rgba(63,185,80,0.3);
+}
+.cand-seq { font-weight: 700; color: #e6edf3; margin-bottom: 3px; }
+.cand-score { font-family: monospace; color: #8b949e; font-size: 0.9em; }
+.cand-prob { color: #3fb950; font-weight: 600; }
+.rank-badge {
+  position: absolute; top: -6px; right: -6px;
+  background: #bc8cff; color: #0d1117;
+  border-radius: 50%; width: 18px; height: 18px;
+  font-size: 0.7em; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+.pruned-x {
+  position: absolute; top: 4px; right: 6px;
+  color: #f85149; font-size: 1em; font-weight: 700;
+}
+
+.legend-row {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  font-size: 0.78em; color: #8b949e;
+}
+.legend-dot {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 50%; margin-right: 4px;
+}
+</style>
+</head>
+<body>
+
+<h1>LLM Beam Search</h1>
+<p class="subtitle">自回归语言模型的解码策略：Greedy vs Beam Search</p>
+
+<div class="tabs" style="max-width:760px;">
+  <button class="tab active" onclick="switchPage('tree')">🌳 搜索树可视化</button>
+  <button class="tab" onclick="switchPage('candidates')">✂️ 剪枝过程</button>
+  <button class="tab" onclick="switchPage('compare')">📊 算法对比</button>
+</div>
+
+<!-- ═══════════ PAGE 1: 搜索树 ═══════════ -->
+<div id="page-tree" class="page active">
+  <div class="control-row">
+    <div class="beam-selector">
+      Beam Width k =
+      <button class="k-btn" onclick="setK(1)">1</button>
+      <button class="k-btn selected" onclick="setK(2)">2</button>
+      <button class="k-btn" onclick="setK(3)">3</button>
+      <button class="k-btn" onclick="setK(4)">4</button>
+    </div>
+    <button class="primary" id="btn-play" onclick="togglePlay()">▶ 播放</button>
+    <button onclick="stepForward()" id="btn-step">下一步</button>
+    <button onclick="resetTree()">重置</button>
+  </div>
+
+  <div class="tree-canvas-wrap">
+    <svg class="tree" id="svg-tree" viewBox="0 0 900 520" height="520"></svg>
+  </div>
+
+  <div class="step-info">
+    <div>
+      <div class="step-badge" id="step-num">0</div>
+      <div style="font-size:0.75em;color:#8b949e;margin-top:2px;">当前步骤</div>
+    </div>
+    <div class="step-detail">
+      <div class="step-title" id="step-title">点击"播放"开始动画</div>
+      <div class="step-desc" id="step-desc">Beam Search 从 &lt;BOS&gt; 出发，维护 k 条最优前缀路径。</div>
+    </div>
+    <div class="beam-list" id="beam-list"></div>
+  </div>
+
+  <div class="legend-row">
+    <span><span class="legend-dot" style="background:#bc8cff;"></span>当前 Beam</span>
+    <span><span class="legend-dot" style="background:#3fb950;"></span>最终最优</span>
+    <span><span class="legend-dot" style="background:#f85149;"></span>Greedy 路径</span>
+    <span><span class="legend-dot" style="background:#30363d;opacity:0.4"></span>已剪枝</span>
+  </div>
+</div>
+
+<!-- ═══════════ PAGE 2: 候选池 ═══════════ -->
+<div id="page-candidates" class="page">
+  <div class="control-row">
+    <div class="beam-selector">
+      Beam Width k =
+      <button class="k-btn" id="ck1" onclick="setCK(1)">1</button>
+      <button class="k-btn selected" id="ck2" onclick="setCK(2)">2</button>
+      <button class="k-btn" id="ck3" onclick="setCK(3)">3</button>
+    </div>
+    <button class="primary" id="cand-play-btn" onclick="toggleCandPlay()">▶ 播放</button>
+    <button onclick="candStepFwd()" id="cand-step-btn">下一步</button>
+    <button onclick="resetCand()">重置</button>
+  </div>
+  <div class="candidates-view" id="cand-view">
+    <div style="color:#8b949e;text-align:center;padding:40px;">点击"播放"查看每步候选列表和剪枝过程</div>
+  </div>
+</div>
+
+<!-- ═══════════ PAGE 3: 对比 ═══════════ -->
+<div id="page-compare" class="page">
+  <div class="compare-grid">
+    <div class="compare-box loser-box">
+      <div class="compare-label">❌ Greedy Search (k=1)</div>
+      <div class="compare-seq" style="color:#f85149;">"The small mouse"</div>
+      <div class="compare-prob">联合概率 <span>0.2808</span></div>
+      <div class="compare-prob" style="margin-top:4px;">log P = <span>-1.2701</span></div>
+      <div class="prob-bar" style="background:linear-gradient(90deg,#f85149,#f8514955);width:69.6%;"></div>
+      <div style="margin-top:12px;font-size:0.82em;color:#8b949e;line-height:1.7;">
+        第一步选 "The"(P=0.52) 看似合理，<br>
+        但之后只能到达次优路径。<br>
+        <strong style="color:#f85149;">比最优差 30.5%</strong>
+      </div>
+    </div>
+    <div class="compare-box winner-box">
+      <div class="compare-label">✅ Beam Search (k=2)</div>
+      <div class="compare-seq" style="color:#3fb950;">"A legendary hero"</div>
+      <div class="compare-prob">联合概率 <span>0.4039</span></div>
+      <div class="compare-prob" style="margin-top:4px;">log P = <span>-0.9065</span></div>
+      <div class="prob-bar" style="background:linear-gradient(90deg,#3fb950,#3fb95055);width:100%;"></div>
+      <div style="margin-top:12px;font-size:0.82em;color:#8b949e;line-height:1.7;">
+        同时保留 "The" 和 "A" 两条路径，<br>
+        step 2 发现 "A legendary"(P=0.408) 跃升为最优。<br>
+        <strong style="color:#3fb950;">找到全局最优</strong>
+      </div>
+    </div>
+  </div>
+
+  <div style="width:100%;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;">
+    <div style="font-weight:600;margin-bottom:14px;">所有可能序列排名（穷举）</div>
+    <div id="all-seqs-list"></div>
+  </div>
+
+  <div style="width:100%;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;">
+    <div style="font-weight:600;margin-bottom:14px;">Beam Width 对搜索质量的影响</div>
+    <div id="k-comparison"></div>
+  </div>
+</div>
+
+<script>
+// ════════════ 数据 ════════════
+const LM = {
+  '<BOS>':          [['The',0.52],['A',0.48]],
+  'The':            [['small',0.60],['big',0.40]],
+  'A':              [['legendary',0.85],['quick',0.15]],
+  'The small':      [['mouse',0.90],['cat',0.10]],
+  'The big':        [['house',0.80],['dog',0.20]],
+  'A legendary':    [['hero',0.99],['fail',0.01]],
+  'A quick':        [['fox',0.95],['bird',0.05]],
+  'The small mouse':[['<EOS>',1.0]],
+  'The small cat':  [['<EOS>',1.0]],
+  'The big house':  [['<EOS>',1.0]],
+  'The big dog':    [['<EOS>',1.0]],
+  'A legendary hero':[['<EOS>',1.0]],
+  'A legendary fail':[['<EOS>',1.0]],
+  'A quick fox':    [['<EOS>',1.0]],
+  'A quick bird':   [['<EOS>',1.0]],
+};
+
+function getLM(seq) {
+  const ctx = seq.length ? seq.join(' ') : '<BOS>';
+  return LM[ctx] || [['<EOS>', 1.0]];
+}
+
+const EPS = 1e-12;
+function lg(p) { return Math.log(p + EPS); }
+
+// 预计算所有路径
+const ALL_PATHS = [
+  {seq: ['A','legendary','hero'],  lp: lg(0.48)+lg(0.85)+lg(0.99)},
+  {seq: ['The','small','mouse'],   lp: lg(0.52)+lg(0.60)+lg(0.90)},
+  {seq: ['The','big','house'],     lp: lg(0.52)+lg(0.40)+lg(0.80)},
+  {seq: ['A','quick','fox'],       lp: lg(0.48)+lg(0.15)+lg(0.95)},
+  {seq: ['The','big','dog'],       lp: lg(0.52)+lg(0.40)+lg(0.20)},
+  {seq: ['The','small','cat'],     lp: lg(0.52)+lg(0.60)+lg(0.10)},
+  {seq: ['A','legendary','fail'],  lp: lg(0.48)+lg(0.85)+lg(0.01)},
+  {seq: ['A','quick','bird'],      lp: lg(0.48)+lg(0.15)+lg(0.05)},
+].sort((a,b) => b.lp - a.lp);
+
+// ════════════ Tab 切换 ════════════
+function switchPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(`page-${name}`).classList.add('active');
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    t.classList.toggle('active', ['tree','candidates','compare'][i] === name);
+  });
+  if (name === 'compare') buildComparePage();
+}
+
+// ════════════ PAGE 1: 搜索树 ════════════
+
+// 树结构定义（固定布局）
+// 节点: {id, label, x, y, children: [{token, prob, nodeId}]}
+const TREE_NODES = {
+  root:   {label:'<BOS>', x:450, y:50},
+  'The':  {label:'The',   x:270, y:150},
+  'A':    {label:'A',     x:630, y:150},
+  'The-small':    {label:'small',  x:150, y:260},
+  'The-big':      {label:'big',    x:360, y:260},
+  'A-legendary':  {label:'legendary', x:580, y:260},
+  'A-quick':      {label:'quick',  x:790, y:260},
+  'The-small-mouse': {label:'mouse', x:80,  y:370},
+  'The-small-cat':   {label:'cat',   x:210, y:370},
+  'The-big-house':   {label:'house', x:310, y:370},
+  'The-big-dog':     {label:'dog',   x:420, y:370},
+  'A-legendary-hero':{label:'hero',  x:530, y:370},
+  'A-legendary-fail':{label:'fail',  x:650, y:370},
+  'A-quick-fox':     {label:'fox',   x:750, y:370},
+  'A-quick-bird':    {label:'bird',  x:860, y:370},
+};
+
+const TREE_EDGES = [
+  {from:'root', to:'The',  token:'The',  prob:0.52},
+  {from:'root', to:'A',    token:'A',    prob:0.48},
+  {from:'The',  to:'The-small', token:'small', prob:0.60},
+  {from:'The',  to:'The-big',   token:'big',   prob:0.40},
+  {from:'A',    to:'A-legendary', token:'legendary', prob:0.85},
+  {from:'A',    to:'A-quick',     token:'quick',     prob:0.15},
+  {from:'The-small', to:'The-small-mouse', token:'mouse', prob:0.90},
+  {from:'The-small', to:'The-small-cat',   token:'cat',   prob:0.10},
+  {from:'The-big',   to:'The-big-house',   token:'house', prob:0.80},
+  {from:'The-big',   to:'The-big-dog',     token:'dog',   prob:0.20},
+  {from:'A-legendary', to:'A-legendary-hero', token:'hero', prob:0.99},
+  {from:'A-legendary', to:'A-legendary-fail', token:'fail', prob:0.01},
+  {from:'A-quick',     to:'A-quick-fox',      token:'fox',  prob:0.95},
+  {from:'A-quick',     to:'A-quick-bird',     token:'bird', prob:0.05},
+];
+
+// Beam paths by k
+const GREEDY_PATH = ['root','The','The-small','The-small-mouse'];
+const BEAM_PATHS = {
+  1: [['root','The','The-small','The-small-mouse']],
+  2: [['root','A','A-legendary','A-legendary-hero'],
+      ['root','The','The-small','The-small-mouse']],
+  3: [['root','A','A-legendary','A-legendary-hero'],
+      ['root','The','The-small','The-small-mouse'],
+      ['root','The','The-big','The-big-house']],
+  4: [['root','A','A-legendary','A-legendary-hero'],
+      ['root','The','The-small','The-small-mouse'],
+      ['root','The','The-big','The-big-house'],
+      ['root','A','A-quick','A-quick-fox']],
+};
+
+// Steps for animation
+function buildSteps(k) {
+  const steps = [
+    {
+      title: '初始状态',
+      desc: `从 &lt;BOS&gt; 出发，维护 ${k} 条前缀路径（beam width = ${k}）。`,
+      revealed: ['root'],
+      beams: [{ seq: [], lp: 0 }],
+      beamNodes: ['root'],
+    },
+    {
+      title: 'Step 1：展开第一层',
+      desc: `LM 给出下一个 token 的概率：The(0.52), A(0.48)。<br>展开 ${k === 1 ? '→ 保留 top-1: "The"' : '→ 保留 top-' + k + ': "The"(0.52) 和 "A"(0.48)'}`,
+      revealed: ['root','The','A'],
+      beams: k === 1
+        ? [{ seq:['The'], lp: lg(0.52) }]
+        : [{ seq:['The'], lp: lg(0.52) }, { seq:['A'], lp: lg(0.48) }].slice(0,k),
+      beamNodes: k === 1 ? ['The'] : ['The','A'].slice(0,k),
+      prunedNodes: k === 1 ? ['A'] : [],
+    },
+    {
+      title: 'Step 2：展开第二层',
+      desc: k <= 2
+        ? (k === 1
+          ? '展开 "The" → small(0.60), big(0.40)。保留 top-1: "The small"(0.312)'
+          : '展开所有 beam，得到 4 个候选。<br>top-2: "The small"(0.312), "A legendary"(0.408)。<br><strong style="color:#bc8cff">"A legendary" 概率更高，跃升为第一！</strong>')
+        : `展开所有 beam → 多个候选，保留 top-${k}`,
+      revealed: ['root','The','A','The-small','The-big','A-legendary','A-quick'],
+      beams: [
+        {seq:['A','legendary'], lp: lg(0.48)+lg(0.85)},
+        {seq:['The','small'], lp: lg(0.52)+lg(0.60)},
+        {seq:['The','big'], lp: lg(0.52)+lg(0.40)},
+        {seq:['A','quick'], lp: lg(0.48)+lg(0.15)},
+      ].slice(0, k),
+      beamNodes: ['A-legendary','The-small','The-big','A-quick'].slice(0,k),
+      prunedNodes: k <= 2 ? ['A-quick'] : (k === 3 ? ['A-quick'] : []),
+    },
+    {
+      title: 'Step 3：展开第三层（最终）',
+      desc: '所有 beam 生成下一个 token 后遇到 &lt;EOS&gt;，序列完成。<br>' +
+            '<strong style="color:#3fb950">"A legendary hero" 以最高联合概率 0.4039 胜出！</strong><br>' +
+            (k === 1 ? '<span style="color:#f85149">Greedy 只得到 "The small mouse"(0.2808)</span>' : ''),
+      revealed: Object.keys(TREE_NODES),
+      beams: BEAM_PATHS[k].map(path => {
+        const tokens = path.slice(1).map(n => TREE_NODES[n].label);
+        return {seq: tokens, lp: ALL_PATHS.find(p => JSON.stringify(p.seq) === JSON.stringify(tokens))?.lp || 0};
+      }),
+      beamNodes: BEAM_PATHS[k].map(p => p[p.length-1]),
+      winner: 'A-legendary-hero',
+    },
+  ];
+  return steps;
+}
+
+let currentK = 2;
+let currentStep = -1;
+let playing = false;
+let playTimer = null;
+let steps = buildSteps(2);
+
+function setK(k) {
+  currentK = k;
+  steps = buildSteps(k);
+  document.querySelectorAll('.k-btn').forEach((b,i) => b.classList.toggle('selected', i+1===k));
+  resetTree();
+}
+
+function resetTree() {
+  currentStep = -1;
+  playing = false;
+  clearTimeout(playTimer);
+  document.getElementById('btn-play').textContent = '▶ 播放';
+  renderTree(-1);
+  updateStepInfo(-1);
+}
+
+function stepForward() {
+  if (currentStep < steps.length - 1) {
+    currentStep++;
+    renderTree(currentStep);
+    updateStepInfo(currentStep);
+  }
+  if (currentStep >= steps.length - 1) {
+    playing = false;
+    clearTimeout(playTimer);
+    document.getElementById('btn-play').textContent = '▶ 重播';
+  }
+}
+
+function togglePlay() {
+  if (currentStep >= steps.length - 1) { resetTree(); }
+  playing = !playing;
+  document.getElementById('btn-play').textContent = playing ? '⏸ 暂停' : '▶ 播放';
+  if (playing) autoPlay();
+}
+
+function autoPlay() {
+  if (!playing) return;
+  if (currentStep >= steps.length - 1) {
+    playing = false;
+    document.getElementById('btn-play').textContent = '▶ 重播';
+    return;
+  }
+  stepForward();
+  playTimer = setTimeout(autoPlay, 1200);
+}
+
+function renderTree(stepIdx) {
+  const svg = document.getElementById('svg-tree');
+  svg.innerHTML = '';
+  const step = stepIdx >= 0 ? steps[stepIdx] : null;
+
+  const revealed = step ? new Set(step.revealed) : new Set(['root']);
+  const beamNodes = step ? new Set(step.beamNodes) : new Set();
+  const pruned = step ? new Set(step.prunedNodes || []) : new Set();
+  const winner = step?.winner;
+
+  // 绘制边
+  TREE_EDGES.forEach(edge => {
+    if (!revealed.has(edge.from) || !revealed.has(edge.to)) return;
+    const from = TREE_NODES[edge.from];
+    const to = TREE_NODES[edge.to];
+
+    // 判断边类型
+    const isGreedy = GREEDY_PATH.includes(edge.from) && GREEDY_PATH.includes(edge.to) &&
+      GREEDY_PATH.indexOf(edge.to) === GREEDY_PATH.indexOf(edge.from) + 1;
+    const isBeam = [...(BEAM_PATHS[currentK] || [])].some(path => {
+      const fi = path.indexOf(edge.from);
+      return fi >= 0 && path[fi+1] === edge.to;
+    });
+    const isPruned = pruned.has(edge.to);
+    const isWinnerEdge = winner && BEAM_PATHS[currentK]?.[0]?.includes(edge.from) &&
+      BEAM_PATHS[currentK]?.[0]?.includes(edge.to) &&
+      BEAM_PATHS[currentK][0].indexOf(edge.to) === BEAM_PATHS[currentK][0].indexOf(edge.from)+1 &&
+      stepIdx === steps.length - 1;
+
+    let edgeClass = 'edge edge-active';
+    if (isPruned) edgeClass = 'edge edge-pruned';
+    else if (isWinnerEdge) edgeClass = 'edge edge-winner';
+    else if (currentK === 1 && isGreedy && stepIdx >= 0) edgeClass = 'edge edge-greedy';
+    else if (isBeam && !isPruned) edgeClass = 'edge edge-beam';
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', from.x); line.setAttribute('y1', from.y + 28);
+    line.setAttribute('x2', to.x);   line.setAttribute('y2', to.y - 28);
+    line.setAttribute('class', edgeClass);
+    svg.appendChild(line);
+
+    // 边标签
+    const mx = (from.x + to.x) / 2;
+    const my = (from.y + to.y) / 2;
+    const labelEl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    labelEl.setAttribute('x', mx); labelEl.setAttribute('y', my);
+    let lblClass = 'edge-label';
+    if (isWinnerEdge) lblClass += ' edge-label-winner';
+    else if (currentK === 1 && isGreedy && stepIdx >= 0) lblClass += ' edge-label-greedy';
+    else if (isBeam && !isPruned) lblClass += ' edge-label-beam';
+    labelEl.setAttribute('class', lblClass);
+    labelEl.textContent = edge.prob.toFixed(2);
+    svg.appendChild(labelEl);
+  });
+
+  // 绘制节点
+  Object.entries(TREE_NODES).forEach(([id, node]) => {
+    if (!revealed.has(id)) return;
+
+    const isBeamNode = beamNodes.has(id);
+    const isPrunedNode = pruned.has(id);
+    const isWinnerNode = id === winner && stepIdx === steps.length - 1;
+    const isGreedyEnd = id === 'The-small-mouse' && currentK === 1 && stepIdx === steps.length-1;
+    const isGreedyNode = currentK === 1 && GREEDY_PATH.includes(id) && stepIdx >= 0;
+
+    let circleClass = 'node-circle ';
+    if (id === 'root') circleClass += 'state-root';
+    else if (isPrunedNode) circleClass += 'state-pruned';
+    else if (isWinnerNode) circleClass += 'state-winner';
+    else if (isGreedyEnd) circleClass += 'state-greedy';
+    else if (isBeamNode) circleClass += 'state-beam';
+    else if (isGreedyNode) circleClass += 'state-greedy';
+    else circleClass += 'state-active';
+
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', node.x); circle.setAttribute('cy', node.y);
+    circle.setAttribute('class', circleClass);
+    g.appendChild(circle);
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', node.x); label.setAttribute('y', node.y);
+    label.setAttribute('class', 'node-token');
+    label.setAttribute('fill', isPrunedNode ? '#444' : (isWinnerNode ? '#3fb950' : (isGreedyEnd||isGreedyNode ? '#f85149' : '#e6edf3')));
+    label.textContent = node.label === '<BOS>' ? 'BOS' : node.label;
+    g.appendChild(label);
+
+    svg.appendChild(g);
+  });
+}
+
+function updateStepInfo(stepIdx) {
+  const numEl = document.getElementById('step-num');
+  const titleEl = document.getElementById('step-title');
+  const descEl = document.getElementById('step-desc');
+  const beamListEl = document.getElementById('beam-list');
+
+  if (stepIdx < 0) {
+    numEl.textContent = '—';
+    titleEl.textContent = '点击"播放"开始动画';
+    descEl.innerHTML = `Beam Search 从 &lt;BOS&gt; 出发，维护 k=${currentK} 条最优前缀路径。`;
+    beamListEl.innerHTML = '';
+    return;
+  }
+
+  const step = steps[stepIdx];
+  numEl.textContent = stepIdx;
+  titleEl.textContent = step.title;
+  descEl.innerHTML = step.desc;
+
+  const beams = step.beams || [];
+  beamListEl.innerHTML = '<div style="font-size:0.78em;color:#8b949e;margin-bottom:6px;">当前 Beams</div>' +
+    beams.map((b, i) => {
+      const seq = b.seq.join(' ') || '<BOS>';
+      const isWinner = i === 0 && stepIdx === steps.length - 1;
+      const isGreedy = currentK === 1 && stepIdx === steps.length - 1;
+      const cls = isWinner ? (isGreedy ? 'greedy-path' : 'winner') : '';
+      return `<div class="beam-item ${cls}">
+        <span class="beam-seq">${seq || 'ε'}</span>
+        <span class="beam-score">${b.lp.toFixed(3)}</span>
+      </div>`;
+    }).join('');
+}
+
+// ════════════ PAGE 2: 候选池 ════════════
+
+let candK = 2;
+let candStep = -1;
+let candPlaying = false;
+let candTimer = null;
+
+function buildCandSteps(k) {
+  return [
+    {
+      title: 'Step 0: 初始',
+      subtitle: `beams = [("", log_P=0)]`,
+      candidates: [{ seq: '', lp: '0.000', prob: '1.0000', rank: 1, keep: true }],
+      beamWidth: k,
+    },
+    {
+      title: 'Step 1: 展开 <BOS>',
+      subtitle: `候选数 = 2，保留 top-${k}`,
+      candidates: [
+        { seq: 'The', lp: '-0.654', prob: '0.5200', rank: 1, keep: k >= 1 },
+        { seq: 'A',   lp: '-0.734', prob: '0.4800', rank: 2, keep: k >= 2 },
+      ],
+      beamWidth: k,
+    },
+    {
+      title: 'Step 2: 展开所有 Beam',
+      subtitle: `候选数 = ${k === 1 ? 2 : 4}，保留 top-${k}`,
+      candidates: [
+        { seq: 'A legendary', lp: '-0.906', prob: '0.4080', rank: 1, keep: k >= 1 },
+        { seq: 'The small',   lp: '-1.165', prob: '0.3120', rank: 2, keep: k >= 2 },
+        { seq: 'The big',     lp: '-1.570', prob: '0.2080', rank: 3, keep: k >= 3 },
+        { seq: 'A quick',     lp: '-2.644', prob: '0.0720', rank: 4, keep: false },
+      ].filter((_, i) => k === 1 ? i < 2 : true),
+      beamWidth: k,
+    },
+    {
+      title: 'Step 3: 展开所有 Beam → 完成',
+      subtitle: `全部到达 <EOS>，选最高分`,
+      candidates: [
+        { seq: 'A legendary hero',  lp: '-0.907', prob: '0.4039', rank: 1, keep: true, winner: true },
+        { seq: 'The small mouse',   lp: '-1.270', prob: '0.2808', rank: 2, keep: k >= 2, greedy: true },
+        { seq: 'The big house',     lp: '-1.793', prob: '0.1664', rank: 3, keep: k >= 3 },
+        { seq: 'A quick fox',       lp: '-2.682', prob: '0.0684', rank: 4, keep: false },
+      ].filter((_, i) => k === 1 ? i < 2 : true),
+      beamWidth: k,
+    },
+  ];
+}
+
+let candSteps = buildCandSteps(2);
+
+function setCK(k) {
+  candK = k;
+  candSteps = buildCandSteps(k);
+  ['ck1','ck2','ck3'].forEach((id,i) => {
+    document.getElementById(id).classList.toggle('selected', i+1 === k);
+  });
+  resetCand();
+}
+
+function resetCand() {
+  candStep = -1;
+  candPlaying = false;
+  clearTimeout(candTimer);
+  document.getElementById('cand-play-btn').textContent = '▶ 播放';
+  document.getElementById('cand-view').innerHTML =
+    '<div style="color:#8b949e;text-align:center;padding:40px;">点击"播放"查看每步候选列表和剪枝过程</div>';
+}
+
+function candStepFwd() {
+  if (candStep < candSteps.length - 1) {
+    candStep++;
+    renderCandStep(candStep);
+  }
+  if (candStep >= candSteps.length - 1) {
+    candPlaying = false;
+    document.getElementById('cand-play-btn').textContent = '▶ 重播';
+  }
+}
+
+function toggleCandPlay() {
+  if (candStep >= candSteps.length - 1) resetCand();
+  candPlaying = !candPlaying;
+  document.getElementById('cand-play-btn').textContent = candPlaying ? '⏸ 暂停' : '▶ 播放';
+  if (candPlaying) candAutoPlay();
+}
+
+function candAutoPlay() {
+  if (!candPlaying) return;
+  if (candStep >= candSteps.length - 1) {
+    candPlaying = false;
+    document.getElementById('cand-play-btn').textContent = '▶ 重播';
+    return;
+  }
+  candStepFwd();
+  candTimer = setTimeout(candAutoPlay, 1400);
+}
+
+function renderCandStep(idx) {
+  const step = candSteps[idx];
+  const view = document.getElementById('cand-view');
+  const kept = step.candidates.filter(c => c.keep).length;
+
+  let html = `
+    <div class="step-header">
+      <div>
+        <div class="step-title-main">${step.title}</div>
+        <div class="step-subtitle">${step.subtitle}</div>
+      </div>
+      <div style="font-size:0.8em;color:#8b949e;">
+        保留 <strong style="color:#bc8cff;">${kept}</strong> / ${step.candidates.length}
+      </div>
+    </div>
+    <div class="candidates-grid">
+  `;
+
+  step.candidates.forEach(c => {
+    const cls = c.winner ? 'winner-card' : (c.keep ? 'kept' : 'pruned-card');
+    html += `
+      <div class="cand-card ${cls}">
+        ${c.keep && !c.pruned ? `<div class="rank-badge">${c.rank}</div>` : ''}
+        ${!c.keep ? '<div class="pruned-x">✕</div>' : ''}
+        <div class="cand-seq">${c.seq || '(empty)'}</div>
+        <div class="cand-score">log P = ${c.lp}</div>
+        <div class="cand-prob">P = ${c.prob}${c.winner ? ' ★' : ''}</div>
+      </div>
+    `;
+  });
+
+  html += '</div>';
+
+  if (idx === candSteps.length - 1) {
+    const winner = step.candidates.find(c => c.winner);
+    html += `<div style="margin-top:16px;padding:12px 16px;background:#0d3a1a;border:1px solid #3fb950;border-radius:8px;font-size:0.88em;">
+      ✅ 最终答案：<strong style="color:#3fb950;">"${winner?.seq}"</strong> &nbsp; P = ${winner?.prob}
+    </div>`;
+  }
+
+  view.innerHTML = html;
+}
+
+// ════════════ PAGE 3: 对比 ════════════
+function buildComparePage() {
+  // 所有序列
+  const seqList = document.getElementById('all-seqs-list');
+  if (seqList.children.length) return; // already built
+
+  const maxProb = Math.exp(ALL_PATHS[0].lp);
+  seqList.innerHTML = ALL_PATHS.map((p, i) => {
+    const prob = Math.exp(p.lp);
+    const barW = (prob / maxProb * 100).toFixed(1);
+    const isWinner = i === 0;
+    const isGreedy = p.seq.join(' ') === 'The small mouse';
+    return `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <span style="font-size:0.78em;color:#8b949e;min-width:16px;">#${i+1}</span>
+        <span style="min-width:200px;font-size:0.85em;font-weight:${isWinner?700:400};
+          color:${isWinner?'#3fb950':isGreedy?'#f85149':'#e6edf3'};">
+          ${p.seq.join(' ')}${isWinner?' ★':''}${isGreedy?' (Greedy)':''}
+        </span>
+        <div style="flex:1;height:16px;background:#21262d;border-radius:3px;overflow:hidden;">
+          <div style="height:100%;width:${barW}%;background:${isWinner?'#3fb950':isGreedy?'#f85149':'#58a6ff'};border-radius:3px;"></div>
+        </div>
+        <span style="font-size:0.82em;color:#8b949e;font-family:monospace;min-width:50px;">${prob.toFixed(4)}</span>
+      </div>
+    `;
+  }).join('');
+
+  // k 对比
+  const kComp = document.getElementById('k-comparison');
+  const results = {1: 'The small mouse', 2: 'A legendary hero', 3: 'A legendary hero', 4: 'A legendary hero'};
+  const probs = {1: 0.2808, 2: 0.4039, 3: 0.4039, 4: 0.4039};
+  kComp.innerHTML = [1,2,3,4].map(k => {
+    const isOptimal = probs[k] === 0.4039;
+    return `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <span style="font-size:0.85em;font-weight:600;min-width:60px;color:#8b949e;">k = ${k}</span>
+        <span style="min-width:180px;font-size:0.85em;color:${isOptimal?'#3fb950':'#f85149'};">"${results[k]}"</span>
+        <div style="flex:1;height:14px;background:#21262d;border-radius:3px;overflow:hidden;">
+          <div style="height:100%;width:${(probs[k]/0.4039*100).toFixed(1)}%;background:${isOptimal?'#3fb950':'#f85149'};border-radius:3px;"></div>
+        </div>
+        <span style="font-size:0.82em;color:#8b949e;font-family:monospace;">${probs[k]}</span>
+        <span style="font-size:0.78em;color:${isOptimal?'#3fb950':'#f85149'};">${isOptimal?'✓ 最优':'✗ 次优'}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+// ════════════ 初始化 ════════════
+renderTree(-1);
+</script>
+</body>
+</html>
