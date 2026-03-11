@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>马与4×4棋盘 — 马尔可夫链动画</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Pro Display', -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px 20px;
+  }
+
+  h1 {
+    font-size: 1.8em;
+    font-weight: 700;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    color: #8b949e;
+    font-size: 0.95em;
+    margin-bottom: 30px;
+  }
+
+  .main-layout {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+    max-width: 1000px;
+  }
+
+  /* ── 棋盘 ── */
+  .board-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .board-container {
+    position: relative;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(4, 90px);
+    grid-template-rows: repeat(4, 90px);
+    gap: 3px;
+    background: #161b22;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid #30363d;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  .cell {
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+    background: #21262d;
+    border: 2px solid #30363d;
+    user-select: none;
+  }
+
+  .cell:hover { transform: scale(1.05); }
+
+  .cell.corner {
+    background: linear-gradient(135deg, #1a3a5c, #0f3460);
+    border-color: #58a6ff;
+  }
+
+  .cell.horse-pos {
+    background: linear-gradient(135deg, #6e3a7e, #bc8cff);
+    border-color: #bc8cff;
+    transform: scale(1.08);
+    box-shadow: 0 0 20px rgba(188,140,255,0.5);
+    z-index: 10;
+  }
+
+  .cell.valid-move {
+    background: linear-gradient(135deg, #1a4a2e, #238636);
+    border-color: #3fb950;
+    animation: pulse-green 1s infinite;
+  }
+
+  .cell.visited {
+    border-color: #e3b341;
+    background: linear-gradient(135deg, #3a2a0f, #4a3520);
+  }
+
+  @keyframes pulse-green {
+    0%, 100% { box-shadow: 0 0 8px rgba(63,185,80,0.4); }
+    50% { box-shadow: 0 0 16px rgba(63,185,80,0.8); }
+  }
+
+  .cell-label {
+    font-size: 0.65em;
+    color: #8b949e;
+    position: absolute;
+    top: 4px;
+    left: 6px;
+  }
+
+  .cell-value {
+    font-size: 1.3em;
+    font-weight: 700;
+  }
+
+  .cell.corner .cell-value { color: #58a6ff; }
+
+  .horse-icon { font-size: 2em; }
+
+  /* ── 右侧面板 ── */
+  .info-section {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 280px;
+    max-width: 340px;
+  }
+
+  .panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 18px;
+  }
+
+  .panel h3 {
+    font-size: 0.9em;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 12px;
+  }
+
+  /* ── Tab 切换 ── */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    background: #161b22;
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+  }
+
+  .tab {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 500;
+    transition: all 0.2s;
+    background: transparent;
+    color: #8b949e;
+  }
+
+  .tab.active {
+    background: #21262d;
+    color: #e6edf3;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+
+  /* ── 步数展示 ── */
+  .step-counter {
+    text-align: center;
+    margin: 10px 0;
+  }
+
+  .step-number {
+    font-size: 3em;
+    font-weight: 800;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    line-height: 1;
+  }
+
+  .step-label { color: #8b949e; font-size: 0.85em; margin-top: 4px; }
+
+  /* ── Monte Carlo ── */
+  .mc-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .stat-box {
+    background: #0d1117;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    border: 1px solid #21262d;
+  }
+
+  .stat-value {
+    font-size: 1.6em;
+    font-weight: 700;
+    color: #58a6ff;
+  }
+
+  .stat-label { font-size: 0.75em; color: #8b949e; margin-top: 2px; }
+
+  .progress-bar {
+    height: 6px;
+    background: #21262d;
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 8px 0;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #58a6ff, #bc8cff);
+    border-radius: 3px;
+    transition: width 0.1s;
+  }
+
+  /* ── 历史分布直方图 ── */
+  .histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 80px;
+    padding: 4px 0;
+  }
+
+  .hist-bar-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+  }
+
+  .hist-bar {
+    width: 100%;
+    background: linear-gradient(to top, #58a6ff, #bc8cff);
+    border-radius: 3px 3px 0 0;
+    transition: height 0.3s;
+    min-height: 2px;
+  }
+
+  .hist-label {
+    font-size: 0.6em;
+    color: #8b949e;
+    margin-top: 3px;
+  }
+
+  /* ── 路径轨迹 ── */
+  .path-display {
+    font-size: 0.8em;
+    color: #8b949e;
+    line-height: 1.8;
+    word-break: break-all;
+    max-height: 80px;
+    overflow-y: auto;
+    background: #0d1117;
+    padding: 8px;
+    border-radius: 6px;
+  }
+
+  .path-step { color: #e6edf3; }
+  .path-corner { color: #58a6ff; font-weight: 700; }
+  .path-arrow { color: #30363d; }
+
+  /* ── 控制按钮 ── */
+  .controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    padding: 9px 18px;
+    border-radius: 7px;
+    border: 1px solid #30363d;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 500;
+    transition: all 0.2s;
+    background: #21262d;
+    color: #e6edf3;
+  }
+
+  button:hover { background: #30363d; border-color: #58a6ff; }
+
+  button.primary {
+    background: linear-gradient(135deg, #1a3a5c, #0f3460);
+    border-color: #58a6ff;
+    color: #58a6ff;
+  }
+
+  button.primary:hover {
+    background: linear-gradient(135deg, #2a4a7c, #1f4470);
+  }
+
+  button.danger {
+    border-color: #f85149;
+    color: #f85149;
+  }
+
+  button.danger:hover { background: #3a1a1a; }
+
+  .speed-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.85em;
+    color: #8b949e;
+  }
+
+  input[type="range"] {
+    width: 100px;
+    accent-color: #58a6ff;
+  }
+
+  /* ── 期望值标注模式 ── */
+  .mode-heatmap .cell { position: relative; }
+  .expect-badge {
+    font-size: 1.2em;
+    font-weight: 700;
+    color: #e6edf3;
+  }
+
+  .cell[data-expect="0"] { background: linear-gradient(135deg, #0f3460, #1a3a5c); border-color: #58a6ff; }
+  .cell[data-expect="5"] { background: linear-gradient(135deg, #0d3a1a, #1a5c2a); border-color: #3fb950; }
+  .cell[data-expect="8"] { background: linear-gradient(135deg, #3a1a0d, #5c2a10); border-color: #e3b341; }
+
+  .legend {
+    display: flex;
+    gap: 12px;
+    font-size: 0.8em;
+    color: #8b949e;
+  }
+
+  .legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+
+  /* ── 公式展示 ── */
+  .formula-box {
+    background: #0d1117;
+    border-left: 3px solid #58a6ff;
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    color: #a5d6ff;
+    line-height: 1.8;
+  }
+
+  .answer-box {
+    text-align: center;
+    padding: 16px;
+    background: linear-gradient(135deg, #0f3460, #1a3a5c);
+    border-radius: 10px;
+    border: 1px solid #58a6ff;
+  }
+
+  .answer-value {
+    font-size: 3em;
+    font-weight: 900;
+    color: #58a6ff;
+  }
+
+  .answer-desc { color: #8b949e; font-size: 0.85em; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>马与 4×4 棋盘</h1>
+<p class="subtitle">马尔可夫链 · 期望步数可视化</p>
+
+<!-- Tab 切换 -->
+<div class="tabs" style="width:100%;max-width:680px;">
+  <button class="tab active" onclick="switchTab('walk')">🐴 随机游走</button>
+  <button class="tab" onclick="switchTab('heatmap')">🌡️ 期望热力图</button>
+  <button class="tab" onclick="switchTab('montecarlo')">🎲 Monte Carlo</button>
+</div>
+
+<!-- ══════════════ TAB 1: 随机游走 ══════════════ -->
+<div id="tab-walk" class="main-layout">
+  <div class="board-section">
+    <div class="board" id="board-walk"></div>
+    <div class="legend">
+      <span><span class="legend-dot" style="background:#bc8cff"></span>马的位置</span>
+      <span><span class="legend-dot" style="background:#3fb950"></span>可走位置</span>
+      <span><span class="legend-dot" style="background:#58a6ff"></span>角落（目标）</span>
+      <span><span class="legend-dot" style="background:#e3b341"></span>已访问</span>
+    </div>
+  </div>
+
+  <div class="info-section">
+    <div class="panel">
+      <div class="step-counter">
+        <div class="step-number" id="walk-steps">0</div>
+        <div class="step-label">当前步数</div>
+      </div>
+      <div class="path-display" id="walk-path">点击"自动走"开始...</div>
+    </div>
+
+    <div class="panel">
+      <h3>统计（累计游走）</h3>
+      <div class="mc-stats">
+        <div class="stat-box">
+          <div class="stat-value" id="walk-trials">0</div>
+          <div class="stat-label">游走次数</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="walk-avg">—</div>
+          <div class="stat-label">平均步数</div>
+        </div>
+      </div>
+      <div class="histogram" id="walk-histogram"></div>
+    </div>
+
+    <div class="panel">
+      <h3>控制</h3>
+      <div class="controls" style="margin-bottom:12px;">
+        <button class="primary" id="btn-auto" onclick="toggleAuto()">▶ 自动走</button>
+        <button onclick="stepOnce()">单步</button>
+        <button onclick="resetWalk()">重置</button>
+      </div>
+      <div class="speed-control">
+        速度：<input type="range" id="speed" min="1" max="10" value="5">
+        <span id="speed-label">中速</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ TAB 2: 热力图 ══════════════ -->
+<div id="tab-heatmap" class="main-layout" style="display:none;">
+  <div class="board-section">
+    <div class="board" id="board-heatmap"></div>
+    <p style="color:#8b949e;font-size:0.85em;margin-top:8px;">点击格子查看走法分析</p>
+  </div>
+
+  <div class="info-section">
+    <div class="panel">
+      <h3>选中格子分析</h3>
+      <div id="cell-analysis" style="color:#8b949e;font-size:0.9em;">点击棋盘上的格子...</div>
+    </div>
+
+    <div class="panel">
+      <h3>方程组推导</h3>
+      <div class="formula-box" id="formula-display">
+E_C = 0  （角落，目标）
+
+E_B = 1 + ²⁄₃·E_B + ¹⁄₃·E_I
+
+E_I = 1 + ¹⁄₂·E_B + ¹⁄₂·E_C
+
+解得：
+  E_B = 8
+  E_I = 5
+
+从角落出发：
+  1 + E_I = <span style="color:#58a6ff;font-weight:700;">6</span>
+      </div>
+    </div>
+
+    <div class="answer-box">
+      <div class="answer-value">6</div>
+      <div class="answer-desc">期望步数（从角落到角落）</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ TAB 3: Monte Carlo ══════════════ -->
+<div id="tab-montecarlo" class="main-layout" style="display:none;">
+  <div class="board-section">
+    <div class="board" id="board-mc"></div>
+    <div style="color:#8b949e;font-size:0.85em;margin-top:8px;">实时游走中...</div>
+  </div>
+
+  <div class="info-section">
+    <div class="panel">
+      <h3>Monte Carlo 收敛</h3>
+      <div class="mc-stats">
+        <div class="stat-box">
+          <div class="stat-value" id="mc-trials">0</div>
+          <div class="stat-label">模拟次数</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="mc-avg">—</div>
+          <div class="stat-label">当前估计</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" style="color:#3fb950;">6.00</div>
+          <div class="stat-label">精确答案</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-value" id="mc-error">—</div>
+          <div class="stat-label">误差</div>
+        </div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="mc-progress" style="width:0%"></div>
+      </div>
+      <div style="font-size:0.75em;color:#8b949e;text-align:right;" id="mc-progress-label">0 / 10000</div>
+    </div>
+
+    <div class="panel">
+      <h3>步数分布</h3>
+      <div class="histogram" id="mc-histogram"></div>
+      <div style="display:flex;justify-content:space-between;font-size:0.72em;color:#8b949e;margin-top:4px;">
+        <span>1步</span><span>↑ 步数</span><span>20+步</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>控制</h3>
+      <div class="controls">
+        <button class="primary" id="mc-btn" onclick="toggleMC()">▶ 开始模拟</button>
+        <button onclick="resetMC()">重置</button>
+      </div>
+      <div class="speed-control" style="margin-top:10px;">
+        批量：<input type="range" id="mc-batch" min="1" max="5" value="3">
+        <span id="mc-batch-label">100次/帧</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════
+//  核心逻辑
+// ════════════════════════════════════════════
+
+const MOVES = [[1,2],[1,-2],[-1,2],[-1,-2],[2,1],[2,-1],[-2,1],[-2,-1]];
+const CORNERS = new Set(['0,0','0,3','3,0','3,3']);
+const EXPECT = {
+  '0,0':0, '0,1':8, '0,2':8, '0,3':0,
+  '1,0':8, '1,1':5, '1,2':5, '1,3':8,
+  '2,0':8, '2,1':5, '2,2':5, '2,3':8,
+  '3,0':0, '3,1':8, '3,2':8, '3,3':0
+};
+const TYPE_NAMES = { '0':' C 角落', '8': 'B 边非角', '5': 'I 内部' };
+
+function key(r, c) { return `${r},${c}`; }
+function validMoves(r, c) {
+  return MOVES.map(([dr,dc]) => [r+dr, c+dc])
+              .filter(([nr,nc]) => nr>=0 && nr<=3 && nc>=0 && nc<=3);
+}
+function isCorner(r, c) { return CORNERS.has(key(r,c)); }
+
+// ════════════════════════════════════════════
+//  Tab 切换
+// ════════════════════════════════════════════
+
+function switchTab(tab) {
+  ['walk','heatmap','montecarlo'].forEach(t => {
+    document.getElementById(`tab-${t}`).style.display = t===tab ? 'flex' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', ['walk','heatmap','montecarlo'][i]===tab);
+  });
+  if (tab === 'montecarlo') initMCBoard();
+}
+
+// ════════════════════════════════════════════
+//  TAB 1: 随机游走
+// ════════════════════════════════════════════
+
+let walkState = {
+  r: 0, c: 0,
+  steps: 0,
+  path: [[0,0]],
+  autoTimer: null,
+  totalTrials: 0,
+  totalSteps: 0,
+  histData: new Array(25).fill(0),
+  visited: new Set(['0,0'])
+};
+
+function buildWalkBoard() {
+  const board = document.getElementById('board-walk');
+  board.innerHTML = '';
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (isCorner(r,c) ? ' corner' : '');
+      cell.id = `wc-${r}-${c}`;
+      cell.innerHTML = `<span class="cell-label">${r},${c}</span>`;
+      if (r===walkState.r && c===walkState.c) {
+        cell.classList.add('horse-pos');
+        cell.innerHTML += `<span class="horse-icon">♞</span>`;
+      }
+      board.appendChild(cell);
+    }
+  }
+  updateWalkBoard();
+}
+
+function updateWalkBoard() {
+  const { r, c, visited } = walkState;
+  const moves = validMoves(r, c);
+
+  for (let rr = 0; rr < 4; rr++) {
+    for (let cc = 0; cc < 4; cc++) {
+      const cell = document.getElementById(`wc-${rr}-${cc}`);
+      cell.className = 'cell';
+      if (isCorner(rr,cc)) cell.classList.add('corner');
+
+      const isHorse = rr===r && cc===c;
+      const isValidMove = !isHorse && moves.some(([mr,mc]) => mr===rr && mc===cc);
+      const wasVisited = visited.has(key(rr,cc)) && !isHorse;
+
+      if (isHorse) {
+        cell.classList.add('horse-pos');
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span><span class="horse-icon">♞</span>`;
+      } else if (isValidMove) {
+        cell.classList.add('valid-move');
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span><span style="font-size:1.2em;color:#3fb950">●</span>`;
+      } else if (wasVisited) {
+        cell.classList.add('visited');
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span>`;
+      } else {
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span>`;
+      }
+    }
+  }
+  document.getElementById('walk-steps').textContent = walkState.steps;
+}
+
+function updateWalkPath() {
+  const pathEl = document.getElementById('walk-path');
+  const path = walkState.path;
+  const recent = path.slice(-20);
+  pathEl.innerHTML = recent.map((pos, i) => {
+    const [r, c] = pos;
+    const isC = isCorner(r,c);
+    const cls = isC ? 'path-corner' : 'path-step';
+    const str = `<span class="${cls}">(${r},${c})</span>`;
+    return i < recent.length-1 ? str + `<span class="path-arrow">→</span>` : str;
+  }).join('');
+  pathEl.scrollTop = pathEl.scrollHeight;
+}
+
+function doStep() {
+  const { r, c } = walkState;
+  const moves = validMoves(r, c);
+  const [nr, nc] = moves[Math.floor(Math.random() * moves.length)];
+  walkState.r = nr;
+  walkState.c = nc;
+  walkState.steps++;
+  walkState.path.push([nr, nc]);
+  walkState.visited.add(key(nr, nc));
+
+  if (isCorner(nr, nc)) {
+    // 完成一轮
+    walkState.totalTrials++;
+    walkState.totalSteps += walkState.steps;
+    const s = walkState.steps;
+    const bucket = Math.min(s-1, 24);
+    walkState.histData[bucket]++;
+
+    document.getElementById('walk-trials').textContent = walkState.totalTrials;
+    const avg = (walkState.totalSteps / walkState.totalTrials).toFixed(2);
+    document.getElementById('walk-avg').textContent = avg;
+    updateHistogram('walk-histogram', walkState.histData);
+
+    // 重置到新角落
+    setTimeout(() => {
+      const corners = [[0,0],[0,3],[3,0],[3,3]];
+      const [sr, sc] = corners[Math.floor(Math.random()*4)];
+      walkState.r = sr; walkState.c = sc;
+      walkState.steps = 0;
+      walkState.path = [[sr,sc]];
+      walkState.visited = new Set([key(sr,sc)]);
+      updateWalkBoard();
+      updateWalkPath();
+    }, 300);
+    return;
+  }
+
+  updateWalkBoard();
+  updateWalkPath();
+}
+
+function stepOnce() { doStep(); }
+
+let autoRunning = false;
+function toggleAuto() {
+  autoRunning = !autoRunning;
+  document.getElementById('btn-auto').textContent = autoRunning ? '⏸ 暂停' : '▶ 自动走';
+  if (autoRunning) runAuto();
+}
+
+function runAuto() {
+  if (!autoRunning) return;
+  doStep();
+  const speed = document.getElementById('speed').value;
+  const delay = Math.round(600 / speed);
+  setTimeout(runAuto, delay);
+}
+
+document.getElementById('speed').addEventListener('input', function() {
+  const labels = ['', '极慢','慢速','慢速','中慢','中速','中速','快速','快速','极快','极快'];
+  document.getElementById('speed-label').textContent = labels[this.value];
+});
+
+function resetWalk() {
+  autoRunning = false;
+  document.getElementById('btn-auto').textContent = '▶ 自动走';
+  walkState = {
+    r: 0, c: 0, steps: 0, path: [[0,0]],
+    autoTimer: null, totalTrials: 0, totalSteps: 0,
+    histData: new Array(25).fill(0), visited: new Set(['0,0'])
+  };
+  buildWalkBoard();
+  updateWalkPath();
+  document.getElementById('walk-trials').textContent = '0';
+  document.getElementById('walk-avg').textContent = '—';
+  initHistogram('walk-histogram', 25);
+}
+
+// ════════════════════════════════════════════
+//  TAB 2: 热力图
+// ════════════════════════════════════════════
+
+function buildHeatmapBoard() {
+  const board = document.getElementById('board-heatmap');
+  board.innerHTML = '';
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const cell = document.createElement('div');
+      const e = EXPECT[key(r,c)];
+      cell.className = 'cell';
+      cell.dataset.expect = e;
+      cell.id = `hc-${r}-${c}`;
+      cell.style.cursor = 'pointer';
+      cell.innerHTML = `
+        <span class="cell-label">${r},${c}</span>
+        <span class="expect-badge">${e === 0 ? '★' : e}</span>
+      `;
+      cell.onclick = () => showCellAnalysis(r, c);
+      board.appendChild(cell);
+    }
+  }
+}
+
+function showCellAnalysis(r, c) {
+  // 高亮选中格
+  document.querySelectorAll('#board-heatmap .cell').forEach(el => {
+    el.style.outline = 'none';
+  });
+  document.getElementById(`hc-${r}-${c}`).style.outline = '3px solid #bc8cff';
+
+  const moves = validMoves(r, c);
+  const e = EXPECT[key(r,c)];
+  const typeMap = {'0':'角落(C)','8':'边非角落(B)','5':'内部(I)'};
+  const typeName = typeMap[String(e)] || '';
+
+  // 高亮可走格
+  moves.forEach(([mr,mc]) => {
+    document.getElementById(`hc-${mr}-${mc}`).style.outline = '2px solid #3fb950';
+  });
+
+  const moveDesc = moves.map(([mr,mc]) => {
+    const ne = EXPECT[key(mr,mc)];
+    const t = typeMap[String(ne)] || '';
+    return `&nbsp;&nbsp;→ (${mr},${mc}) [E=${ne}, ${t}]`;
+  }).join('<br>');
+
+  const avgE = moves.reduce((s,[mr,mc]) => s + EXPECT[key(mr,mc)], 0) / moves.length;
+
+  document.getElementById('cell-analysis').innerHTML = `
+    <div style="margin-bottom:10px;">
+      <strong style="color:#e6edf3;">(${r},${c})</strong>
+      <span style="color:#8b949e;"> — ${typeName}</span>
+    </div>
+    <div style="margin-bottom:8px;color:#8b949e;">有效走法 (${moves.length} 步)：</div>
+    <div style="font-size:0.85em;line-height:2;">${moveDesc}</div>
+    <div style="margin-top:10px;padding:8px;background:#0d1117;border-radius:6px;">
+      E[${r},${c}] = 1 + <sup>1</sup>/<sub>${moves.length}</sub>·Σ E[邻居]<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= 1 + ${avgE.toFixed(2)}<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= <strong style="color:#58a6ff;">${e}</strong>
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════
+//  TAB 3: Monte Carlo
+// ════════════════════════════════════════════
+
+let mcState = {
+  running: false,
+  trials: 0,
+  totalSteps: 0,
+  histData: new Array(25).fill(0),
+  MAX_TRIALS: 10000,
+  batchSizes: [10, 50, 100, 500, 1000],
+  currentPos: [0,0]
+};
+
+function initMCBoard() {
+  const board = document.getElementById('board-mc');
+  if (board.children.length > 0) return;
+  board.innerHTML = '';
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (isCorner(r,c) ? ' corner' : '');
+      cell.id = `mc-${r}-${c}`;
+      cell.innerHTML = `<span class="cell-label">${r},${c}</span>`;
+      if (r===0 && c===0) cell.innerHTML += `<span class="horse-icon">♞</span>`;
+      board.appendChild(cell);
+    }
+  }
+}
+
+function updateMCBoard(r, c) {
+  for (let rr = 0; rr < 4; rr++) {
+    for (let cc = 0; cc < 4; cc++) {
+      const cell = document.getElementById(`mc-${rr}-${cc}`);
+      cell.className = 'cell' + (isCorner(rr,cc) ? ' corner' : '');
+      if (rr===r && cc===c) {
+        cell.classList.add('horse-pos');
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span><span class="horse-icon">♞</span>`;
+      } else {
+        cell.innerHTML = `<span class="cell-label">${rr},${cc}</span>`;
+      }
+    }
+  }
+}
+
+function runMCBatch() {
+  if (!mcState.running) return;
+
+  const batchIdx = parseInt(document.getElementById('mc-batch').value) - 1;
+  const batchSize = mcState.batchSizes[batchIdx];
+
+  for (let i = 0; i < batchSize; i++) {
+    if (mcState.trials >= mcState.MAX_TRIALS) {
+      mcState.running = false;
+      document.getElementById('mc-btn').textContent = '▶ 重新模拟';
+      break;
+    }
+    // 随机从角落出发
+    const corners = [[0,0],[0,3],[3,0],[3,3]];
+    let [r, c] = corners[Math.floor(Math.random()*4)];
+    let steps = 0;
+    while (true) {
+      const moves = validMoves(r, c);
+      [r, c] = moves[Math.floor(Math.random()*moves.length)];
+      steps++;
+      if (isCorner(r,c)) break;
+    }
+    mcState.trials++;
+    mcState.totalSteps += steps;
+    const bucket = Math.min(steps-1, 24);
+    mcState.histData[bucket]++;
+    mcState.currentPos = [r, c];
+  }
+
+  // 更新 UI
+  updateMCBoard(...mcState.currentPos);
+  const avg = (mcState.totalSteps / mcState.trials).toFixed(4);
+  const error = Math.abs(parseFloat(avg) - 6).toFixed(4);
+  document.getElementById('mc-trials').textContent = mcState.trials.toLocaleString();
+  document.getElementById('mc-avg').textContent = avg;
+  document.getElementById('mc-error').textContent = error;
+  document.getElementById('mc-progress').style.width = (mcState.trials/mcState.MAX_TRIALS*100)+'%';
+  document.getElementById('mc-progress-label').textContent = `${mcState.trials.toLocaleString()} / ${mcState.MAX_TRIALS.toLocaleString()}`;
+  updateHistogram('mc-histogram', mcState.histData);
+
+  if (mcState.running) requestAnimationFrame(runMCBatch);
+}
+
+function toggleMC() {
+  if (mcState.trials >= mcState.MAX_TRIALS) resetMC();
+  mcState.running = !mcState.running;
+  document.getElementById('mc-btn').textContent = mcState.running ? '⏸ 暂停' : '▶ 继续';
+  if (mcState.running) requestAnimationFrame(runMCBatch);
+}
+
+function resetMC() {
+  mcState = {
+    running: false, trials: 0, totalSteps: 0,
+    histData: new Array(25).fill(0), MAX_TRIALS: 10000,
+    batchSizes: [10, 50, 100, 500, 1000], currentPos: [0,0]
+  };
+  document.getElementById('mc-btn').textContent = '▶ 开始模拟';
+  document.getElementById('mc-trials').textContent = '0';
+  document.getElementById('mc-avg').textContent = '—';
+  document.getElementById('mc-error').textContent = '—';
+  document.getElementById('mc-progress').style.width = '0%';
+  document.getElementById('mc-progress-label').textContent = '0 / 10000';
+  initHistogram('mc-histogram', 25);
+  updateMCBoard(0, 0);
+}
+
+document.getElementById('mc-batch').addEventListener('input', function() {
+  const labels = ['10次/帧','50次/帧','100次/帧','500次/帧','1000次/帧'];
+  document.getElementById('mc-batch-label').textContent = labels[this.value-1];
+});
+
+// ════════════════════════════════════════════
+//  共享工具：直方图
+// ════════════════════════════════════════════
+
+function initHistogram(id, bins) {
+  const el = document.getElementById(id);
+  el.innerHTML = '';
+  for (let i = 0; i < bins; i++) {
+    const wrap = document.createElement('div');
+    wrap.className = 'hist-bar-wrap';
+    wrap.innerHTML = `
+      <div class="hist-bar" id="${id}-bar-${i}" style="height:2px;"></div>
+      ${(i+1)%5===0 ? `<span class="hist-label">${i+1}</span>` : '<span class="hist-label"></span>'}
+    `;
+    el.appendChild(wrap);
+  }
+}
+
+function updateHistogram(id, data) {
+  const max = Math.max(...data, 1);
+  data.forEach((v, i) => {
+    const bar = document.getElementById(`${id}-bar-${i}`);
+    if (bar) bar.style.height = Math.max(2, (v/max)*72) + 'px';
+  });
+}
+
+// ════════════════════════════════════════════
+//  初始化
+// ════════════════════════════════════════════
+
+buildWalkBoard();
+buildHeatmapBoard();
+initHistogram('walk-histogram', 25);
+initHistogram('mc-histogram', 25);
+</script>
+</body>
+</html>
