@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LayerNorm vs RMSNorm — 归一化可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 24px 0 6px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.82em; margin-bottom: 18px; }
+
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+  .tab-btn {
+    padding: 9px 24px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.9em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+
+  .panel { display: none; padding: 0 20px 32px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  canvas { display: block; }
+
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 14px; flex-wrap: wrap;
+  }
+  .controls button {
+    padding: 7px 18px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer;
+    border-radius: 6px; transition: all 0.15s;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 16px 20px; margin-top: 16px; font-size: 0.82em; line-height: 1.7;
+  }
+  .info-box .val { color: #e94560; font-weight: bold; }
+  .info-box .val2 { color: #4fc3f7; font-weight: bold; }
+
+  /* Panel 2 — flow */
+  .flow-pair { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+  .flow-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 12px;
+    padding: 16px; flex: 1; min-width: 300px; max-width: 420px;
+  }
+  .flow-card h3 { text-align: center; color: #e94560; margin-bottom: 12px; font-size: 0.95em; }
+  .flow-card canvas { margin: 0 auto; }
+
+  /* Panel 3 — interactive */
+  .input-row {
+    display: flex; justify-content: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center;
+  }
+  .input-row label { font-size: 0.8em; color: #888; }
+  .input-row input[type=number] {
+    width: 60px; padding: 5px 8px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.85em; border-radius: 5px; text-align: center;
+  }
+  .dual-canvas { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .dual-canvas > div { text-align: center; }
+  .dual-canvas canvas { border: 1px solid #0f3460; border-radius: 8px; }
+  .dual-canvas .label { font-size: 0.78em; color: #aaa; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>LayerNorm vs RMSNorm</h1>
+<p class="subtitle">归一化机制原理对比 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">分布变化</button>
+  <button class="tab-btn" onclick="switchTab(1)">计算流程</button>
+  <button class="tab-btn" onclick="switchTab(2)">交互计算器</button>
+</div>
+
+<!-- ============== Panel 1: Distribution ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="distCanvas" width="900" height="400"></canvas>
+  <div class="controls">
+    <button onclick="newSample()">随机新样本</button>
+    <button id="btnLN" class="on" onclick="toggleLN()">LayerNorm</button>
+    <button id="btnRMS" class="on" onclick="toggleRMS()">RMSNorm</button>
+  </div>
+  <div class="info-box" id="distInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Computation Flow ============== -->
+<div class="panel" id="panel-1">
+  <div class="flow-pair">
+    <div class="flow-card">
+      <h3>LayerNorm (5 步)</h3>
+      <canvas id="flowLN" width="380" height="420"></canvas>
+    </div>
+    <div class="flow-card">
+      <h3>RMSNorm (3 步)</h3>
+      <canvas id="flowRMS" width="380" height="420"></canvas>
+    </div>
+  </div>
+  <div class="controls" style="margin-top:16px;">
+    <button onclick="flowReset()">重置</button>
+    <button onclick="flowPrev()">上一步</button>
+    <button onclick="flowNextStep()">下一步</button>
+    <button id="autoFlowBtn" onclick="flowAuto()">自动播放</button>
+  </div>
+  <div class="info-box" id="flowInfo" style="text-align:center;">点击「下一步」开始</div>
+</div>
+
+<!-- ============== Panel 3: Interactive Calculator ============== -->
+<div class="panel" id="panel-2">
+  <div class="input-row">
+    <label>输入向量 (逗号分隔):</label>
+    <input type="text" id="vecInput" value="3.0, -1.5, 0.8, 2.2, -0.3, 1.1, -2.0, 0.5" style="width:360px; padding:6px 10px; border:1px solid #0f3460; background:#16213e; color:#e0e0e0; font-family:inherit; font-size:0.85em; border-radius:5px;">
+    <button onclick="calcNorm()" style="padding:6px 16px; border:1px solid #0f3460; background:#16213e; color:#e0e0e0; font-family:inherit; cursor:pointer; border-radius:5px;">计算</button>
+  </div>
+  <div class="dual-canvas">
+    <div>
+      <canvas id="calcLN" width="420" height="300"></canvas>
+      <p class="label">LayerNorm 输出</p>
+    </div>
+    <div>
+      <canvas id="calcRMS" width="420" height="300"></canvas>
+      <p class="label">RMSNorm 输出</p>
+    </div>
+  </div>
+  <div class="info-box" id="calcInfo"></div>
+</div>
+
+<script>
+// ============================================================
+// Helpers
+// ============================================================
+const DPR = Math.min(devicePixelRatio, 2);
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+function gauss() { // Box-Muller
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+function variance(arr) { const m = mean(arr); return arr.reduce((a, x) => a + (x - m) ** 2, 0) / arr.length; }
+function rms(arr) { return Math.sqrt(arr.reduce((a, x) => a + x * x, 0) / arr.length + 1e-6); }
+
+function layerNorm(x) {
+  const m = mean(x), v = variance(x);
+  return x.map(xi => (xi - m) / Math.sqrt(v + 1e-6));
+}
+function rmsNorm(x) {
+  const r = rms(x);
+  return x.map(xi => xi / r);
+}
+
+// ============================================================
+// Tab
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 0) drawDist();
+  if (i === 1) { flowStep = -1; drawFlows(); }
+  if (i === 2) calcNorm();
+}
+
+// ============================================================
+// Panel 1: Distribution visualization
+// ============================================================
+let sampleX = [];
+let showLN = true, showRMS = true;
+
+function newSample() {
+  const D = 32;
+  const shift = (Math.random() - 0.5) * 6;
+  const scale = 0.5 + Math.random() * 3;
+  sampleX = Array.from({ length: D }, () => gauss() * scale + shift);
+  drawDist();
+}
+
+function toggleLN() { showLN = !showLN; document.getElementById('btnLN').classList.toggle('on'); drawDist(); }
+function toggleRMS() { showRMS = !showRMS; document.getElementById('btnRMS').classList.toggle('on'); drawDist(); }
+
+function drawDist() {
+  const W = 900, H = 400;
+  const ctx = setupCanvas('distCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  if (!sampleX.length) newSample();
+
+  const ln = layerNorm(sampleX);
+  const rm = rmsNorm(sampleX);
+  const D = sampleX.length;
+
+  // Find range
+  const all = [...sampleX, ...(showLN ? ln : []), ...(showRMS ? rm : [])];
+  const minV = Math.min(...all) - 0.5;
+  const maxV = Math.max(...all) + 0.5;
+  const range = maxV - minV || 1;
+
+  const left = 60, right = W - 20, top = 40, bottom = H - 40;
+  const barW = (right - left) / D;
+
+  // Y axis
+  function yOf(v) { return bottom - (v - minV) / range * (bottom - top); }
+
+  // Zero line
+  const y0 = yOf(0);
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(left, y0); ctx.lineTo(right, y0); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#666'; ctx.font = '11px monospace'; ctx.textAlign = 'right';
+  ctx.fillText('0', left - 8, y0 + 4);
+
+  // Draw bars
+  function drawBars(data, color, offsetX, w) {
+    data.forEach((v, i) => {
+      const x = left + i * barW + offsetX;
+      const y = yOf(v);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.75;
+      if (v >= 0) {
+        ctx.fillRect(x, y, w, y0 - y);
+      } else {
+        ctx.fillRect(x, y0, w, y - y0);
+      }
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  const totalSeries = 1 + (showLN ? 1 : 0) + (showRMS ? 1 : 0);
+  const bw = barW * 0.85 / totalSeries;
+  let si = 0;
+
+  // Raw input
+  drawBars(sampleX, '#888', si * bw + barW * 0.05, bw);
+  si++;
+  if (showLN) { drawBars(ln, '#e94560', si * bw + barW * 0.05, bw); si++; }
+  if (showRMS) { drawBars(rm, '#4fc3f7', si * bw + barW * 0.05, bw); si++; }
+
+  // Legend
+  const legends = [{ label: '原始输入', color: '#888' }];
+  if (showLN) legends.push({ label: 'LayerNorm', color: '#e94560' });
+  if (showRMS) legends.push({ label: 'RMSNorm', color: '#4fc3f7' });
+  ctx.font = '12px monospace'; ctx.textAlign = 'left';
+  legends.forEach((lg, i) => {
+    const lx = left + i * 140;
+    ctx.fillStyle = lg.color;
+    ctx.fillRect(lx, 10, 14, 14);
+    ctx.fillStyle = '#ccc';
+    ctx.fillText(lg.label, lx + 20, 22);
+  });
+
+  // X axis labels
+  ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  for (let i = 0; i < D; i += 4) {
+    ctx.fillText('d' + i, left + i * barW + barW / 2, bottom + 16);
+  }
+
+  // Info
+  const m = mean(sampleX), v = variance(sampleX), r = rms(sampleX);
+  const lnM = mean(ln), lnV = variance(ln);
+  const rmSqM = rm.reduce((a, x) => a + x * x, 0) / D;
+  document.getElementById('distInfo').innerHTML =
+    `<b>输入:</b> mean=<span class="val">${m.toFixed(3)}</span>, var=<span class="val">${v.toFixed(3)}</span>, rms=<span class="val">${r.toFixed(3)}</span><br>` +
+    `<b>LayerNorm 后:</b> mean=<span class="val">${lnM.toFixed(4)}</span>, var=<span class="val">${lnV.toFixed(4)}</span> → 均值≈0, 方差≈1<br>` +
+    `<b>RMSNorm 后:</b> E[x²]=<span class="val2">${rmSqM.toFixed(4)}</span> → 均方≈1（但均值不一定为0）`;
+}
+
+// ============================================================
+// Panel 2: Step-by-step computation flow
+// ============================================================
+let flowStep = -1;
+let flowTimer = null;
+
+const LN_STEPS = [
+  '① 求均值 μ = E[x]',
+  '② 中心化 x\' = x − μ',
+  '③ 求方差 σ² = E[(x−μ)²]',
+  '④ 归一化 x̂ = x\' / √(σ²+ε)',
+  '⑤ 仿射 y = γ·x̂ + β',
+];
+const RMS_STEPS = [
+  '① 求平方均值 E[x²]',
+  '② RMS = √(E[x²]+ε)',
+  '③ 缩放 y = γ · x/RMS',
+];
+
+function drawFlows() {
+  drawOneFlow('flowLN', LN_STEPS, '#e94560', '#e9456033');
+  drawOneFlow('flowRMS', RMS_STEPS, '#4fc3f7', '#4fc3f733');
+  const maxSteps = Math.max(LN_STEPS.length, RMS_STEPS.length);
+  const info = flowStep >= 0 && flowStep < maxSteps
+    ? (flowStep < LN_STEPS.length ? LN_STEPS[flowStep] : '') +
+      (flowStep < RMS_STEPS.length ? '  |  ' + RMS_STEPS[flowStep] : '')
+    : '点击「下一步」开始';
+  document.getElementById('flowInfo').textContent = info;
+}
+
+function drawOneFlow(canvasId, steps, accent, accentFade) {
+  const c = document.getElementById(canvasId);
+  const W = 380, H = 420;
+  c.width = W * DPR; c.height = H * DPR;
+  c.style.width = W + 'px'; c.style.height = H + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+
+  const bw = 260, bh = 38;
+  const cx = W / 2;
+  const gap = H / (steps.length + 1);
+
+  steps.forEach((label, i) => {
+    const y = gap * (i + 0.5);
+    const active = i <= flowStep;
+    const current = i === flowStep;
+
+    // Connector
+    if (i > 0) {
+      const prevY = gap * (i - 0.5) + bh;
+      ctx.strokeStyle = (i <= flowStep) ? accent : '#333';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, prevY);
+      ctx.lineTo(cx, y);
+      ctx.stroke();
+      // arrowhead
+      if (i <= flowStep) {
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.moveTo(cx - 5, y - 2);
+        ctx.lineTo(cx + 5, y - 2);
+        ctx.lineTo(cx, y + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Box
+    const bx = cx - bw / 2;
+    ctx.fillStyle = current ? accent : (active ? '#0f3460' : '#16213e');
+    ctx.strokeStyle = current ? accent : (active ? accent : '#333');
+    ctx.lineWidth = current ? 2.5 : 1.5;
+    roundRect(ctx, bx, y, bw, bh, 8);
+
+    // Label
+    ctx.fillStyle = active ? '#fff' : '#555';
+    ctx.font = `${current ? 'bold ' : ''}12px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, cx, y + bh / 2);
+
+    // Strikethrough for steps RMS doesn't have
+    if (canvasId === 'flowRMS' && steps === RMS_STEPS) {
+      // no strikethrough needed
+    }
+  });
+
+  // Time indicator
+  ctx.fillStyle = '#666';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  const activeCount = Math.min(flowStep + 1, steps.length);
+  if (activeCount > 0) {
+    ctx.fillText(`${activeCount} / ${steps.length} 步`, cx, H - 10);
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
+function flowNextStep() {
+  const max = Math.max(LN_STEPS.length, RMS_STEPS.length);
+  if (flowStep < max - 1) { flowStep++; drawFlows(); }
+}
+function flowPrev() { if (flowStep >= 0) { flowStep--; drawFlows(); } }
+function flowReset() {
+  flowStep = -1;
+  if (flowTimer) { clearInterval(flowTimer); flowTimer = null; }
+  document.getElementById('autoFlowBtn').classList.remove('on');
+  drawFlows();
+}
+function flowAuto() {
+  const btn = document.getElementById('autoFlowBtn');
+  if (flowTimer) { clearInterval(flowTimer); flowTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  flowStep = -1;
+  const max = Math.max(LN_STEPS.length, RMS_STEPS.length);
+  flowTimer = setInterval(() => {
+    flowStep++;
+    if (flowStep >= max) { clearInterval(flowTimer); flowTimer = null; btn.classList.remove('on'); }
+    drawFlows();
+  }, 1000);
+}
+
+// ============================================================
+// Panel 3: Interactive Calculator
+// ============================================================
+function calcNorm() {
+  const raw = document.getElementById('vecInput').value;
+  const x = raw.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+  if (x.length < 2) return;
+
+  const ln = layerNorm(x);
+  const rm = rmsNorm(x);
+  const D = x.length;
+
+  drawCalcBars('calcLN', x, ln, '#e94560');
+  drawCalcBars('calcRMS', x, rm, '#4fc3f7');
+
+  const m = mean(x), v = variance(x), r = rms(x);
+  const lnM = mean(ln), lnV = variance(ln);
+  const rmSq = rm.reduce((a, xi) => a + xi * xi, 0) / D;
+  document.getElementById('calcInfo').innerHTML =
+    `<b>输入 (D=${D}):</b> μ=<span class="val">${m.toFixed(4)}</span>, σ²=<span class="val">${v.toFixed(4)}</span>, RMS=<span class="val">${r.toFixed(4)}</span><br>` +
+    `<b>LayerNorm:</b> μ=<span class="val">${lnM.toFixed(6)}</span>, σ²=<span class="val">${lnV.toFixed(4)}</span><br>` +
+    `<b>RMSNorm:</b> E[x²]=<span class="val2">${rmSq.toFixed(4)}</span><br>` +
+    `<b>公式:</b> LayerNorm = γ(x−μ)/σ+β &nbsp;|&nbsp; RMSNorm = γx/RMS`;
+}
+
+function drawCalcBars(canvasId, orig, normed, color) {
+  const W = 420, H = 300;
+  const ctx = setupCanvas(canvasId, W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const D = orig.length;
+  const all = [...orig, ...normed];
+  const minV = Math.min(...all, 0) - 0.3;
+  const maxV = Math.max(...all, 0) + 0.3;
+  const range = maxV - minV || 1;
+
+  const left = 40, right = W - 10, top = 20, bottom = H - 30;
+  const barW = (right - left) / D;
+
+  function yOf(v) { return bottom - (v - minV) / range * (bottom - top); }
+
+  // zero line
+  const y0 = yOf(0);
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(left, y0); ctx.lineTo(right, y0); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // bars
+  for (let i = 0; i < D; i++) {
+    const x1 = left + i * barW;
+    const bw = barW * 0.4;
+
+    // original
+    const yo = yOf(orig[i]);
+    ctx.fillStyle = '#555';
+    ctx.globalAlpha = 0.6;
+    if (orig[i] >= 0) ctx.fillRect(x1, yo, bw, y0 - yo);
+    else ctx.fillRect(x1, y0, bw, yo - y0);
+
+    // normed
+    const yn = yOf(normed[i]);
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.8;
+    if (normed[i] >= 0) ctx.fillRect(x1 + bw, yn, bw, y0 - yn);
+    else ctx.fillRect(x1 + bw, y0, bw, yn - y0);
+
+    ctx.globalAlpha = 1;
+
+    // value text
+    ctx.fillStyle = color;
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    const textY = normed[i] >= 0 ? yn - 4 : yn + 10;
+    ctx.fillText(normed[i].toFixed(2), x1 + bw, textY);
+  }
+
+  // x labels
+  ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  for (let i = 0; i < D; i++) {
+    ctx.fillText(i, left + i * barW + barW / 2, bottom + 14);
+  }
+
+  // legend
+  ctx.font = '10px monospace'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#555'; ctx.fillRect(left, 4, 10, 10);
+  ctx.fillStyle = '#aaa'; ctx.fillText('原始', left + 14, 13);
+  ctx.fillStyle = color; ctx.fillRect(left + 60, 4, 10, 10);
+  ctx.fillStyle = '#aaa'; ctx.fillText('归一化', left + 74, 13);
+}
+
+// ============================================================
+// Init
+// ============================================================
+newSample();
+</script>
+</body>
+</html>

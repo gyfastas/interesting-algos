@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MHA vs GQA vs MLA — 注意力机制可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  h1 {
+    text-align: center;
+    padding: 24px 0 8px;
+    font-size: 1.6em;
+    color: #e94560;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 0.85em;
+    margin-bottom: 20px;
+  }
+
+  /* === Tab Switcher === */
+  .tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .tab-btn {
+    padding: 10px 28px;
+    border: 2px solid #0f3460;
+    background: transparent;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 0.95em;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+
+  .panel { display: none; padding: 0 24px 32px; }
+  .panel.active { display: block; }
+
+  /* === Section 1: MHA Flow Animation === */
+  .flow-container {
+    max-width: 900px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .flow-canvas {
+    width: 100%;
+    height: 520px;
+    display: block;
+  }
+  .flow-controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .flow-controls button {
+    padding: 8px 20px;
+    border: 1px solid #0f3460;
+    background: #16213e;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s;
+  }
+  .flow-controls button:hover { background: #0f3460; }
+  .flow-controls button.active-btn { background: #e94560; border-color: #e94560; }
+  .step-label {
+    text-align: center;
+    margin-top: 12px;
+    font-size: 1.05em;
+    color: #e94560;
+    min-height: 1.5em;
+  }
+
+  /* === Section 2: KV Cache Comparison === */
+  .cache-container {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  .config-row {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .config-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .config-item label {
+    font-size: 0.8em;
+    color: #888;
+  }
+  .config-item input {
+    width: 100px;
+    padding: 6px 10px;
+    border: 1px solid #0f3460;
+    background: #16213e;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 0.9em;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .bars-area {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 40px;
+    height: 300px;
+    padding: 0 20px;
+    margin-bottom: 16px;
+  }
+  .bar-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .bar-wrapper {
+    width: 80px;
+    height: 260px;
+    display: flex;
+    align-items: flex-end;
+  }
+  .bar {
+    width: 100%;
+    border-radius: 6px 6px 0 0;
+    transition: height 0.6s ease;
+    position: relative;
+  }
+  .bar-value {
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.8em;
+    white-space: nowrap;
+    color: #fff;
+    font-weight: bold;
+  }
+  .bar-label {
+    font-size: 0.85em;
+    color: #bbb;
+    font-weight: bold;
+  }
+  .bar-pct {
+    font-size: 0.75em;
+    color: #888;
+  }
+
+  /* === Section 3: Head Topology === */
+  .topo-container {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .topo-row {
+    display: flex;
+    justify-content: center;
+    gap: 48px;
+    flex-wrap: wrap;
+  }
+  .topo-card {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 12px;
+    padding: 20px;
+    width: 260px;
+  }
+  .topo-card h3 {
+    text-align: center;
+    color: #e94560;
+    margin-bottom: 16px;
+    font-size: 1em;
+  }
+  .topo-canvas {
+    width: 220px;
+    height: 200px;
+    display: block;
+    margin: 0 auto;
+  }
+  .topo-desc {
+    margin-top: 12px;
+    font-size: 0.78em;
+    color: #aaa;
+    text-align: center;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<h1>MHA vs GQA vs MLA</h1>
+<p class="subtitle">多头注意力机制演进 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">MHA 计算流程</button>
+  <button class="tab-btn" onclick="switchTab(1)">KV Cache 对比</button>
+  <button class="tab-btn" onclick="switchTab(2)">头拓扑结构</button>
+</div>
+
+<!-- ==================== Panel 1: MHA Flow ==================== -->
+<div class="panel active" id="panel-0">
+  <div class="flow-container">
+    <canvas class="flow-canvas" id="flowCanvas"></canvas>
+    <div class="step-label" id="stepLabel">点击「下一步」开始演示</div>
+    <div class="flow-controls">
+      <button onclick="flowReset()">重置</button>
+      <button onclick="flowPrev()">上一步</button>
+      <button id="nextBtn" onclick="flowNext()">下一步</button>
+      <button id="autoBtn" onclick="flowAuto()">自动播放</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== Panel 2: KV Cache Bar Chart ==================== -->
+<div class="panel" id="panel-1">
+  <div class="cache-container">
+    <div class="config-row">
+      <div class="config-item">
+        <label>d_model</label>
+        <input id="cfg-d" type="number" value="4096" onchange="updateBars()">
+      </div>
+      <div class="config-item">
+        <label>n_heads</label>
+        <input id="cfg-h" type="number" value="32" onchange="updateBars()">
+      </div>
+      <div class="config-item">
+        <label>n_layers</label>
+        <input id="cfg-l" type="number" value="32" onchange="updateBars()">
+      </div>
+      <div class="config-item">
+        <label>seq_len</label>
+        <input id="cfg-s" type="number" value="4096" onchange="updateBars()">
+      </div>
+      <div class="config-item">
+        <label>GQA kv_heads</label>
+        <input id="cfg-gqa" type="number" value="8" onchange="updateBars()">
+      </div>
+      <div class="config-item">
+        <label>MLA d_c</label>
+        <input id="cfg-dc" type="number" value="512" onchange="updateBars()">
+      </div>
+    </div>
+    <div class="bars-area" id="barsArea"></div>
+  </div>
+</div>
+
+<!-- ==================== Panel 3: Head Topology ==================== -->
+<div class="panel" id="panel-2">
+  <div class="topo-container">
+    <div class="topo-row">
+      <div class="topo-card">
+        <h3>MHA</h3>
+        <canvas class="topo-canvas" id="topoMHA"></canvas>
+        <p class="topo-desc">每个 Q 头对应独立的 K/V 头<br>KV Cache = 2 × H × d_k</p>
+      </div>
+      <div class="topo-card">
+        <h3>GQA (4Q : 1KV)</h3>
+        <canvas class="topo-canvas" id="topoGQA"></canvas>
+        <p class="topo-desc">多个 Q 头共享一组 KV 头<br>KV Cache = 2 × H_kv × d_k</p>
+      </div>
+      <div class="topo-card">
+        <h3>MLA</h3>
+        <canvas class="topo-canvas" id="topoMLA"></canvas>
+        <p class="topo-desc">所有 KV 头从共享 latent 恢复<br>KV Cache = d_c (极小)</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Tab switching
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(idx) {
+  panels.forEach((p, i) => p.classList.toggle('active', i === idx));
+  tabBtns.forEach((b, i) => b.classList.toggle('active', i === idx));
+  if (idx === 1) updateBars();
+  if (idx === 2) drawAllTopo();
+}
+
+// ============================================================
+// Panel 1: MHA Step-by-step Flow
+// ============================================================
+const flowCanvas = document.getElementById('flowCanvas');
+const flowCtx = flowCanvas.getContext('2d');
+let flowStep = -1;
+let autoTimer = null;
+
+const STEPS = [
+  { label: '① 输入 X: (B, S, D)', highlight: 'input' },
+  { label: '② 线性投影 → Q, K, V', highlight: 'project' },
+  { label: '③ 拆分多头 (B, H, S, d_k)', highlight: 'split' },
+  { label: '④ Q × K^T / √d_k → 注意力分数', highlight: 'scores' },
+  { label: '⑤ Softmax → 注意力权重', highlight: 'softmax' },
+  { label: '⑥ 权重 × V → 加权求和', highlight: 'weighted' },
+  { label: '⑦ Concat 多头 + W_o 输出投影', highlight: 'output' },
+];
+
+function resizeFlowCanvas() {
+  const rect = flowCanvas.parentElement.getBoundingClientRect();
+  flowCanvas.width = rect.width * devicePixelRatio;
+  flowCanvas.height = 520 * devicePixelRatio;
+  flowCanvas.style.width = rect.width + 'px';
+  flowCanvas.style.height = '520px';
+  flowCtx.scale(devicePixelRatio, devicePixelRatio);
+  drawFlow();
+}
+
+function drawRoundedRect(ctx, x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+}
+
+function drawArrow(ctx, x1, y1, x2, y2, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const hl = 8;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - hl * Math.cos(angle - 0.4), y2 - hl * Math.sin(angle - 0.4));
+  ctx.lineTo(x2 - hl * Math.cos(angle + 0.4), y2 - hl * Math.sin(angle + 0.4));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawFlow() {
+  const W = flowCanvas.width / devicePixelRatio;
+  const H = flowCanvas.height / devicePixelRatio;
+  flowCtx.clearRect(0, 0, W, H);
+
+  const hl = STEPS[flowStep]?.highlight || '';
+  const dim = '#333';
+  const bright = '#e0e0e0';
+  const accent = '#e94560';
+  const blue = '#4fc3f7';
+
+  const cx = W / 2;
+  const bw = 160, bh = 36, gap = 62;
+
+  // Nodes
+  const nodes = [
+    { id: 'input',    label: 'X (B, S, D)',          y: 20 },
+    { id: 'project',  label: 'W_q / W_k / W_v',     y: 20 + gap },
+    { id: 'split',    label: '拆分 H 个头',            y: 20 + gap*2 },
+    { id: 'scores',   label: 'QK^T / √d_k',         y: 20 + gap*3 },
+    { id: 'softmax',  label: 'Softmax',              y: 20 + gap*4 },
+    { id: 'weighted', label: 'Attn × V',             y: 20 + gap*5 },
+    { id: 'output',   label: 'Concat + W_o',         y: 20 + gap*6 },
+  ];
+
+  // Determine which nodes to highlight
+  const stepIdx = STEPS.findIndex(s => s.highlight === hl);
+
+  nodes.forEach((n, i) => {
+    const active = i <= stepIdx;
+    const current = n.id === hl;
+    const fill = current ? accent : (active ? '#0f3460' : '#16213e');
+    const stroke = current ? accent : (active ? blue : '#333');
+    const textColor = active ? '#fff' : '#555';
+
+    drawRoundedRect(flowCtx, cx - bw/2, n.y, bw, bh, 8, fill, stroke);
+    flowCtx.fillStyle = textColor;
+    flowCtx.font = `${current ? 'bold ' : ''}13px "SF Mono", monospace`;
+    flowCtx.textAlign = 'center';
+    flowCtx.textBaseline = 'middle';
+    flowCtx.fillText(n.label, cx, n.y + bh/2);
+
+    // Arrow to next
+    if (i < nodes.length - 1) {
+      const arrowActive = i < stepIdx;
+      drawArrow(flowCtx, cx, n.y + bh, cx, nodes[i+1].y,
+        arrowActive ? blue : '#333');
+    }
+  });
+
+  // Side annotations for QKV split
+  if (stepIdx >= 1) {
+    const py = nodes[1].y;
+    const labels = ['Q', 'K', 'V'];
+    const colors = ['#e94560', '#4fc3f7', '#66bb6a'];
+    labels.forEach((l, i) => {
+      const sx = cx + bw/2 + 30 + i * 60;
+      const sy = py + bh/2;
+      flowCtx.fillStyle = stepIdx >= 1 ? colors[i] : '#444';
+      flowCtx.font = 'bold 16px monospace';
+      flowCtx.textAlign = 'center';
+      flowCtx.fillText(l, sx, sy);
+      if (stepIdx >= 1) {
+        flowCtx.strokeStyle = colors[i];
+        flowCtx.lineWidth = 1;
+        flowCtx.setLineDash([4, 3]);
+        flowCtx.beginPath();
+        flowCtx.moveTo(cx + bw/2, sy);
+        flowCtx.lineTo(sx - 10, sy);
+        flowCtx.stroke();
+        flowCtx.setLineDash([]);
+      }
+    });
+  }
+
+  // Multi-head visualization
+  if (stepIdx >= 2) {
+    const sy = nodes[2].y;
+    const headColors = ['#e94560', '#4fc3f7', '#66bb6a', '#ffd54f'];
+    for (let i = 0; i < 4; i++) {
+      const hx = cx - 100 + i * 55;
+      flowCtx.fillStyle = headColors[i];
+      flowCtx.globalAlpha = stepIdx >= 2 ? 0.7 : 0.2;
+      flowCtx.fillRect(hx, sy - 4, 40, bh + 8);
+      flowCtx.globalAlpha = 1;
+      flowCtx.fillStyle = '#fff';
+      flowCtx.font = '10px monospace';
+      flowCtx.textAlign = 'center';
+      flowCtx.fillText(`h${i}`, hx + 20, sy - 10);
+    }
+  }
+
+  // Attention matrix preview
+  if (stepIdx >= 3) {
+    const matX = cx - bw/2 - 120;
+    const matY = nodes[3].y - 10;
+    const cellSize = 12;
+    const matSize = 4;
+    flowCtx.fillStyle = '#aaa';
+    flowCtx.font = '10px monospace';
+    flowCtx.textAlign = 'center';
+    flowCtx.fillText('Attn Matrix', matX + matSize * cellSize / 2, matY - 6);
+    for (let r = 0; r < matSize; r++) {
+      for (let c = 0; c < matSize; c++) {
+        const val = c <= r ? (0.3 + Math.random() * 0.7) : 0;
+        const alpha = stepIdx >= 4 ? val : (val > 0 ? 0.4 : 0);
+        flowCtx.fillStyle = `rgba(233, 69, 96, ${alpha})`;
+        flowCtx.fillRect(matX + c * cellSize, matY + r * cellSize, cellSize - 1, cellSize - 1);
+      }
+    }
+    if (stepIdx >= 3) {
+      flowCtx.fillStyle = '#888';
+      flowCtx.font = '9px monospace';
+      flowCtx.fillText('causal mask', matX + matSize * cellSize / 2, matY + matSize * cellSize + 12);
+    }
+  }
+
+  // Update label
+  document.getElementById('stepLabel').textContent =
+    flowStep >= 0 && flowStep < STEPS.length ? STEPS[flowStep].label : '点击「下一步」开始演示';
+}
+
+function flowNext() {
+  if (flowStep < STEPS.length - 1) { flowStep++; drawFlow(); }
+}
+function flowPrev() {
+  if (flowStep > -1) { flowStep--; drawFlow(); }
+}
+function flowReset() {
+  flowStep = -1;
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  document.getElementById('autoBtn').classList.remove('active-btn');
+  drawFlow();
+}
+function flowAuto() {
+  const btn = document.getElementById('autoBtn');
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+    btn.classList.remove('active-btn');
+  } else {
+    btn.classList.add('active-btn');
+    flowStep = -1;
+    autoTimer = setInterval(() => {
+      flowStep++;
+      if (flowStep >= STEPS.length) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        btn.classList.remove('active-btn');
+      }
+      drawFlow();
+    }, 1200);
+  }
+}
+
+// ============================================================
+// Panel 2: KV Cache Bar Chart
+// ============================================================
+function updateBars() {
+  const d = +document.getElementById('cfg-d').value;
+  const h = +document.getElementById('cfg-h').value;
+  const l = +document.getElementById('cfg-l').value;
+  const s = +document.getElementById('cfg-s').value;
+  const gqa_kv = +document.getElementById('cfg-gqa').value;
+  const dc = +document.getElementById('cfg-dc').value;
+  const dk = d / h;
+  const bp = 2; // fp16
+
+  const mha = 2 * l * h * dk * s * bp;
+  const gqa = 2 * l * gqa_kv * dk * s * bp;
+  const mqa = 2 * l * 1 * dk * s * bp;
+  const mla = l * dc * s * bp;
+
+  const items = [
+    { name: 'MHA', value: mha, color: '#e94560' },
+    { name: 'GQA', value: gqa, color: '#4fc3f7' },
+    { name: 'MQA', value: mqa, color: '#66bb6a' },
+    { name: 'MLA', value: mla, color: '#ffd54f' },
+  ];
+  const maxVal = Math.max(...items.map(i => i.value));
+  const maxH = 240;
+
+  const area = document.getElementById('barsArea');
+  area.innerHTML = '';
+  items.forEach(item => {
+    const pct = (item.value / mha * 100).toFixed(1);
+    const gb = (item.value / 1e9).toFixed(2);
+    const barH = Math.max(4, item.value / maxVal * maxH);
+    area.innerHTML += `
+      <div class="bar-group">
+        <div class="bar-wrapper">
+          <div class="bar" style="height:${barH}px; background:${item.color}">
+            <span class="bar-value">${gb} GB</span>
+          </div>
+        </div>
+        <span class="bar-label">${item.name}</span>
+        <span class="bar-pct">${pct}%</span>
+      </div>
+    `;
+  });
+}
+
+// ============================================================
+// Panel 3: Head Topology Diagrams
+// ============================================================
+function drawAllTopo() {
+  drawTopoMHA();
+  drawTopoGQA();
+  drawTopoMLA();
+}
+
+function setupTopoCanvas(id) {
+  const c = document.getElementById(id);
+  const dpr = devicePixelRatio;
+  c.width = 220 * dpr;
+  c.height = 200 * dpr;
+  c.style.width = '220px';
+  c.style.height = '200px';
+  const ctx = c.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return ctx;
+}
+
+function drawCircle(ctx, x, y, r, fill) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function drawLine(ctx, x1, y1, x2, y2, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width || 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
+
+function drawTopoMHA() {
+  const ctx = setupTopoCanvas('topoMHA');
+  const n = 8;
+  const qY = 40, kvY = 150, r = 10;
+  const startX = 20, gap = 25;
+
+  ctx.fillStyle = '#888';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Q heads', 0, 20);
+  ctx.fillText('K/V heads', 0, kvY + r + 16);
+
+  for (let i = 0; i < n; i++) {
+    const x = startX + i * gap;
+    drawLine(ctx, x, qY + r, x, kvY - r, '#4fc3f755');
+    drawCircle(ctx, x, qY, r, '#e94560');
+    drawCircle(ctx, x, kvY, r, '#4fc3f7');
+  }
+}
+
+function drawTopoGQA() {
+  const ctx = setupTopoCanvas('topoGQA');
+  const nQ = 8, nKV = 2;
+  const qY = 40, kvY = 150, r = 10;
+  const qStartX = 20, qGap = 25;
+  const kvGap = 80, kvStartX = 60;
+
+  ctx.fillStyle = '#888';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Q heads', 0, 20);
+  ctx.fillText('K/V heads', 0, kvY + r + 16);
+
+  for (let g = 0; g < nKV; g++) {
+    const kvX = kvStartX + g * kvGap;
+    for (let j = 0; j < nQ / nKV; j++) {
+      const qi = g * (nQ / nKV) + j;
+      const qx = qStartX + qi * qGap;
+      drawLine(ctx, qx, qY + r, kvX, kvY - r, '#66bb6a55');
+      drawCircle(ctx, qx, qY, r, '#e94560');
+    }
+    drawCircle(ctx, kvX, kvY, r * 1.3, '#66bb6a');
+  }
+}
+
+function drawTopoMLA() {
+  const ctx = setupTopoCanvas('topoMLA');
+  const nQ = 8;
+  const qY = 40, latentY = 110, kvY = 165, r = 10;
+  const qStartX = 20, qGap = 25;
+  const latentX = 110;
+
+  ctx.fillStyle = '#888';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('Q heads', 0, 20);
+  ctx.fillText('latent c', 148, latentY + 5);
+  ctx.fillText('K/V (recovered)', 58, kvY + r + 16);
+
+  // latent node (bigger, gold)
+  drawCircle(ctx, latentX, latentY, r * 1.8, '#ffd54f');
+  ctx.fillStyle = '#1a1a2e';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('c', latentX, latentY + 4);
+
+  // Q heads
+  for (let i = 0; i < nQ; i++) {
+    const qx = qStartX + i * qGap;
+    drawCircle(ctx, qx, qY, r, '#e94560');
+  }
+
+  // KV recovered from latent
+  for (let i = 0; i < nQ; i++) {
+    const kvx = qStartX + i * qGap;
+    drawLine(ctx, latentX, latentY + r * 1.8, kvx, kvY - r, '#ffd54f44');
+    drawCircle(ctx, kvx, kvY, r * 0.7, '#4fc3f7');
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+window.addEventListener('resize', resizeFlowCanvas);
+resizeFlowCanvas();
+updateBars();
+setTimeout(drawAllTopo, 100);
+</script>
+</body>
+</html>
