@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adam vs AdamW vs Muon — 优化器可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn {
+    padding: 8px 22px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+
+  .panel { display: none; padding: 0 16px 28px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .controls button, .controls select {
+    padding: 7px 16px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer;
+    border-radius: 6px;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+
+  canvas { display: block; margin: 0 auto; border-radius: 8px; }
+
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7;
+  }
+  .c-adam { color: #e94560; }
+  .c-adamw { color: #4fc3f7; }
+  .c-muon { color: #ffd54f; }
+
+  .legend { display: flex; justify-content: center; gap: 24px; margin-top: 10px; font-size: 0.8em; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  /* Panel 2 */
+  .formula-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 8px;
+  }
+  .formula-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px; padding: 16px;
+  }
+  .formula-card h3 { font-size: 0.9em; margin-bottom: 10px; text-align: center; }
+  .formula-card canvas { margin: 0 auto; }
+
+  @media (max-width: 800px) {
+    .formula-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Adam vs AdamW vs Muon</h1>
+<p class="subtitle">优化器原理对比 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">优化轨迹</button>
+  <button class="tab-btn" onclick="switchTab(1)">更新公式</button>
+  <button class="tab-btn" onclick="switchTab(2)">状态量对比</button>
+</div>
+
+<!-- ============== Panel 1: Optimization Trajectory ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="trajCanvas" width="900" height="500"></canvas>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> Adam</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#4fc3f7"></div> AdamW</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ffd54f"></div> Muon</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#66bb6a"></div> SGD+Momentum</div>
+  </div>
+  <div class="controls">
+    <label style="font-size:0.8em; color:#888;">损失面:</label>
+    <select id="surfaceSelect" onchange="resetTraj()">
+      <option value="rosenbrock">Rosenbrock (窄谷)</option>
+      <option value="beale">Beale (多鞍点)</option>
+      <option value="ackley">Ackley (多局部极小)</option>
+    </select>
+    <button onclick="resetTraj()">重置</button>
+    <button onclick="stepTraj()">单步</button>
+    <button id="playBtn" onclick="togglePlay()">播放</button>
+    <span id="stepCount" style="font-size:0.8em; color:#888; min-width:80px;">Step: 0</span>
+  </div>
+  <div class="info-box" id="trajInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Update Formulas Step-by-step ============== -->
+<div class="panel" id="panel-1">
+  <div class="formula-grid">
+    <div class="formula-card">
+      <h3 class="c-adam">Adam</h3>
+      <canvas id="fmAdam" width="280" height="360"></canvas>
+    </div>
+    <div class="formula-card">
+      <h3 class="c-adamw">AdamW</h3>
+      <canvas id="fmAdamW" width="280" height="360"></canvas>
+    </div>
+    <div class="formula-card">
+      <h3 class="c-muon">Muon</h3>
+      <canvas id="fmMuon" width="280" height="360"></canvas>
+    </div>
+  </div>
+  <div class="controls">
+    <button onclick="fmReset()">重置</button>
+    <button onclick="fmPrev()">上一步</button>
+    <button onclick="fmNext()">下一步</button>
+    <button id="fmAutoBtn" onclick="fmAuto()">自动播放</button>
+  </div>
+  <div class="info-box" id="fmInfo" style="text-align:center;">点击「下一步」开始</div>
+</div>
+
+<!-- ============== Panel 3: Memory / State Comparison ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="memCanvas" width="900" height="420"></canvas>
+  <div class="controls">
+    <label style="font-size:0.8em; color:#888;">参数量 (M):</label>
+    <input type="number" id="paramM" value="7000" style="width:80px; padding:5px; border:1px solid #0f3460; background:#16213e; color:#e0e0e0; font-family:inherit; border-radius:5px; text-align:center;" onchange="drawMem()">
+  </div>
+  <div class="info-box" id="memInfo"></div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 0) drawTraj();
+  if (i === 1) drawFormulas();
+  if (i === 2) drawMem();
+}
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+// ============================================================
+// Panel 1: Optimization Trajectory on 2D loss surface
+// ============================================================
+const SURFACES = {
+  rosenbrock: {
+    fn: (x, y) => (1 - x) ** 2 + 100 * (y - x * x) ** 2,
+    grad: (x, y) => [
+      -2 * (1 - x) - 400 * x * (y - x * x),
+      200 * (y - x * x)
+    ],
+    range: [[-2, 2], [-1, 3]],
+    start: [-1.5, 2.0],
+    optimal: [1, 1],
+  },
+  beale: {
+    fn: (x, y) => (1.5 - x + x * y) ** 2 + (2.25 - x + x * y * y) ** 2 + (2.625 - x + x * y ** 3) ** 2,
+    grad: (x, y) => {
+      const a = 1.5 - x + x * y, b = 2.25 - x + x * y * y, c = 2.625 - x + x * y ** 3;
+      return [
+        2 * a * (-1 + y) + 2 * b * (-1 + y * y) + 2 * c * (-1 + y ** 3),
+        2 * a * x + 2 * b * 2 * x * y + 2 * c * 3 * x * y * y
+      ];
+    },
+    range: [[-4, 4], [-4, 4]],
+    start: [-3, 3],
+    optimal: [3, 0.5],
+  },
+  ackley: {
+    fn: (x, y) => -20 * Math.exp(-0.2 * Math.sqrt(0.5 * (x * x + y * y))) - Math.exp(0.5 * (Math.cos(2 * Math.PI * x) + Math.cos(2 * Math.PI * y))) + Math.E + 20,
+    grad: (x, y) => {
+      const r = Math.sqrt(0.5 * (x * x + y * y)) + 1e-8;
+      const expR = Math.exp(-0.2 * r);
+      const expC = Math.exp(0.5 * (Math.cos(2 * Math.PI * x) + Math.cos(2 * Math.PI * y)));
+      return [
+        20 * 0.2 * expR * (0.5 * x / r) + expC * 0.5 * 2 * Math.PI * Math.sin(2 * Math.PI * x),
+        20 * 0.2 * expR * (0.5 * y / r) + expC * 0.5 * 2 * Math.PI * Math.sin(2 * Math.PI * y)
+      ];
+    },
+    range: [[-4, 4], [-4, 4]],
+    start: [-3, 3],
+    optimal: [0, 0],
+  },
+};
+
+// Optimizer states
+let optimizers, surface, step, playTimer;
+
+function initOptimizers() {
+  const s = SURFACES[document.getElementById('surfaceSelect').value];
+  surface = s;
+  step = 0;
+  const [x0, y0] = s.start;
+
+  optimizers = {
+    sgdm: { path: [[x0, y0]], m: [0, 0], lr: 0.0003, beta: 0.9, color: '#66bb6a', name: 'SGD+M' },
+    adam: { path: [[x0, y0]], m: [0, 0], v: [0, 0], lr: 0.01, b1: 0.9, b2: 0.999, color: '#e94560', name: 'Adam' },
+    adamw: { path: [[x0, y0]], m: [0, 0], v: [0, 0], lr: 0.01, b1: 0.9, b2: 0.999, wd: 0.01, color: '#4fc3f7', name: 'AdamW' },
+    muon: { path: [[x0, y0]], M: [[0, 0], [0, 0]], lr: 0.01, beta: 0.95, color: '#ffd54f', name: 'Muon' },
+  };
+}
+
+function clipGrad(g, maxNorm) {
+  const norm = Math.sqrt(g[0] ** 2 + g[1] ** 2);
+  if (norm > maxNorm) return [g[0] * maxNorm / norm, g[1] * maxNorm / norm];
+  return g;
+}
+
+function doStep() {
+  step++;
+  const t = step;
+  const eps = 1e-8;
+
+  for (const key of Object.keys(optimizers)) {
+    const opt = optimizers[key];
+    const [x, y] = opt.path[opt.path.length - 1];
+    let g = surface.grad(x, y);
+    g = clipGrad(g, 50);
+
+    let nx, ny;
+    if (key === 'sgdm') {
+      opt.m[0] = opt.beta * opt.m[0] + (1 - opt.beta) * g[0];
+      opt.m[1] = opt.beta * opt.m[1] + (1 - opt.beta) * g[1];
+      nx = x - opt.lr * opt.m[0];
+      ny = y - opt.lr * opt.m[1];
+    } else if (key === 'adam') {
+      for (let i = 0; i < 2; i++) {
+        opt.m[i] = opt.b1 * opt.m[i] + (1 - opt.b1) * g[i];
+        opt.v[i] = opt.b2 * opt.v[i] + (1 - opt.b2) * g[i] ** 2;
+      }
+      const mh = opt.m.map(mi => mi / (1 - opt.b1 ** t));
+      const vh = opt.v.map(vi => vi / (1 - opt.b2 ** t));
+      nx = x - opt.lr * mh[0] / (Math.sqrt(vh[0]) + eps);
+      ny = y - opt.lr * mh[1] / (Math.sqrt(vh[1]) + eps);
+    } else if (key === 'adamw') {
+      for (let i = 0; i < 2; i++) {
+        opt.m[i] = opt.b1 * opt.m[i] + (1 - opt.b1) * g[i];
+        opt.v[i] = opt.b2 * opt.v[i] + (1 - opt.b2) * g[i] ** 2;
+      }
+      const mh = opt.m.map(mi => mi / (1 - opt.b1 ** t));
+      const vh = opt.v.map(vi => vi / (1 - opt.b2 ** t));
+      const dx = (1 - opt.lr * opt.wd) * x;
+      const dy = (1 - opt.lr * opt.wd) * y;
+      nx = dx - opt.lr * mh[0] / (Math.sqrt(vh[0]) + eps);
+      ny = dy - opt.lr * mh[1] / (Math.sqrt(vh[1]) + eps);
+    } else if (key === 'muon') {
+      // 2D 简化版 Muon: 动量 + 归一化（2D 正交化 ≈ 方向归一化）
+      opt.M[0][0] = opt.beta * opt.M[0][0] + g[0];
+      opt.M[0][1] = opt.beta * opt.M[0][1] + g[1];
+      const norm = Math.sqrt(opt.M[0][0] ** 2 + opt.M[0][1] ** 2) + eps;
+      nx = x - opt.lr * opt.M[0][0] / norm;
+      ny = y - opt.lr * opt.M[0][1] / norm;
+    }
+
+    // Clamp to range
+    const [[xmin, xmax], [ymin, ymax]] = surface.range;
+    nx = Math.max(xmin, Math.min(xmax, nx));
+    ny = Math.max(ymin, Math.min(ymax, ny));
+    opt.path.push([nx, ny]);
+  }
+}
+
+function drawTraj() {
+  const W = 900, H = 500;
+  const ctx = setupCanvas('trajCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  if (!surface) initOptimizers();
+  const [[xmin, xmax], [ymin, ymax]] = surface.range;
+
+  // Draw contour
+  const cw = W, ch = H;
+  const imgData = ctx.createImageData(cw, ch);
+
+  // Sample loss values for coloring
+  const vals = [];
+  for (let py = 0; py < ch; py++) {
+    for (let px = 0; px < cw; px++) {
+      const x = xmin + (px / cw) * (xmax - xmin);
+      const y = ymin + (py / ch) * (ymax - ymin);
+      vals.push(surface.fn(x, y));
+    }
+  }
+  const maxVal = Math.min(Math.max(...vals), 500);
+
+  for (let i = 0; i < vals.length; i++) {
+    const t = Math.min(vals[i] / maxVal, 1);
+    const logT = Math.log(1 + t * 9) / Math.log(10); // log scale
+    const r = Math.floor(26 + logT * 20);
+    const g = Math.floor(26 + logT * 15);
+    const b = Math.floor(46 + logT * 30);
+    imgData.data[i * 4] = r;
+    imgData.data[i * 4 + 1] = g;
+    imgData.data[i * 4 + 2] = b;
+    imgData.data[i * 4 + 3] = 255;
+  }
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = cw; tmpCanvas.height = ch;
+  tmpCanvas.getContext('2d').putImageData(imgData, 0, 0);
+  ctx.drawImage(tmpCanvas, 0, 0, W, H);
+
+  // Draw contour lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 0.5;
+  const levels = 20;
+  for (let l = 1; l <= levels; l++) {
+    const threshold = (l / levels) * maxVal;
+    for (let py = 1; py < ch - 1; py += 2) {
+      for (let px = 1; px < cw - 1; px += 2) {
+        const v = vals[py * cw + px];
+        const vr = vals[py * cw + px + 1];
+        const vb = vals[(py + 1) * cw + px];
+        if ((v < threshold) !== (vr < threshold) || (v < threshold) !== (vb < threshold)) {
+          ctx.fillStyle = 'rgba(255,255,255,0.06)';
+          ctx.fillRect(px * W / cw, py * H / ch, 1, 1);
+        }
+      }
+    }
+  }
+
+  // Coordinate transform
+  function toScreen(x, y) {
+    return [(x - xmin) / (xmax - xmin) * W, (y - ymin) / (ymax - ymin) * H];
+  }
+
+  // Draw optimal point
+  if (surface.optimal) {
+    const [ox, oy] = toScreen(...surface.optimal);
+    ctx.beginPath();
+    ctx.arc(ox, oy, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('optimal', ox + 10, oy + 4);
+  }
+
+  // Draw paths
+  for (const key of ['sgdm', 'adam', 'adamw', 'muon']) {
+    const opt = optimizers[key];
+    const path = opt.path;
+    if (path.length < 2) continue;
+
+    ctx.strokeStyle = opt.color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    const [sx, sy] = toScreen(...path[0]);
+    ctx.moveTo(sx, sy);
+    for (let i = 1; i < path.length; i++) {
+      const [px, py] = toScreen(...path[i]);
+      ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Current position
+    const [cx, cy] = toScreen(...path[path.length - 1]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = opt.color;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Start position
+  const [sx, sy] = toScreen(...surface.start);
+  ctx.beginPath();
+  ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.globalAlpha = 0.5;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  document.getElementById('stepCount').textContent = `Step: ${step}`;
+
+  // Info
+  let info = '';
+  for (const key of ['adam', 'adamw', 'muon', 'sgdm']) {
+    const opt = optimizers[key];
+    const [px, py] = opt.path[opt.path.length - 1];
+    const loss = surface.fn(px, py);
+    const cls = key === 'adam' ? 'c-adam' : key === 'adamw' ? 'c-adamw' : key === 'muon' ? 'c-muon' : '';
+    info += `<span class="${cls}"><b>${opt.name}</b></span>: (${px.toFixed(3)}, ${py.toFixed(3)}) loss=${loss.toFixed(4)} &nbsp;&nbsp;`;
+  }
+  document.getElementById('trajInfo').innerHTML = info;
+}
+
+function stepTraj() { doStep(); drawTraj(); }
+function resetTraj() {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  document.getElementById('playBtn').classList.remove('on');
+  initOptimizers();
+  drawTraj();
+}
+function togglePlay() {
+  const btn = document.getElementById('playBtn');
+  if (playTimer) {
+    clearInterval(playTimer); playTimer = null;
+    btn.classList.remove('on');
+  } else {
+    btn.classList.add('on');
+    playTimer = setInterval(() => {
+      if (step >= 500) { clearInterval(playTimer); playTimer = null; btn.classList.remove('on'); return; }
+      doStep();
+      drawTraj();
+    }, 50);
+  }
+}
+
+// ============================================================
+// Panel 2: Formula step-by-step
+// ============================================================
+let fmStep = -1, fmTimer = null;
+
+const FM_ADAM = [
+  'm = β₁m + (1-β₁)g',
+  'v = β₂v + (1-β₂)g²',
+  'm̂ = m/(1-β₁ᵗ)',
+  'v̂ = v/(1-β₂ᵗ)',
+  'θ -= η · m̂/(√v̂+ε)',
+];
+const FM_ADAMW = [
+  'm = β₁m + (1-β₁)g',
+  'v = β₂v + (1-β₂)g²',
+  'm̂ = m/(1-β₁ᵗ)',
+  'v̂ = v/(1-β₂ᵗ)',
+  'θ *= (1-ηλ)      ← WD',
+  'θ -= η · m̂/(√v̂+ε)',
+];
+const FM_MUON = [
+  'M = βM + G',
+  'X = M / ‖M‖',
+  'X = NS_iter(X)   ×5',
+  'W -= η · X',
+];
+
+function drawFormulas() {
+  drawOneFormula('fmAdam', FM_ADAM, '#e94560');
+  drawOneFormula('fmAdamW', FM_ADAMW, '#4fc3f7');
+  drawOneFormula('fmMuon', FM_MUON, '#ffd54f');
+
+  const maxS = Math.max(FM_ADAM.length, FM_ADAMW.length, FM_MUON.length);
+  const label = fmStep >= 0 && fmStep < maxS ? `Step ${fmStep + 1}` : '点击「下一步」开始';
+  document.getElementById('fmInfo').textContent = label;
+}
+
+function drawOneFormula(canvasId, steps, accent) {
+  const W = 280, H = 360;
+  const ctx = setupCanvas(canvasId, W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const bw = 240, bh = 32;
+  const cx = W / 2;
+  const totalH = steps.length * (bh + 16) - 16;
+  const startY = (H - totalH) / 2;
+
+  steps.forEach((label, i) => {
+    const y = startY + i * (bh + 16);
+    const active = i <= fmStep;
+    const current = i === fmStep;
+
+    // connector
+    if (i > 0) {
+      ctx.strokeStyle = active ? accent : '#333';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, y - 16);
+      ctx.lineTo(cx, y);
+      ctx.stroke();
+      if (active) {
+        ctx.fillStyle = accent;
+        ctx.beginPath();
+        ctx.moveTo(cx - 4, y - 3); ctx.lineTo(cx + 4, y - 3); ctx.lineTo(cx, y + 2);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+
+    // box
+    const bx = cx - bw / 2;
+    ctx.fillStyle = current ? accent : (active ? '#0f3460' : '#16213e');
+    ctx.strokeStyle = current ? accent : (active ? accent : '#333');
+    ctx.lineWidth = current ? 2 : 1;
+    ctx.beginPath();
+    ctx.roundRect(bx, y, bw, bh, 6);
+    ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = active ? '#fff' : '#555';
+    ctx.font = `${current ? 'bold ' : ''}11px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, cx, y + bh / 2);
+  });
+}
+
+function fmNext() {
+  const max = Math.max(FM_ADAM.length, FM_ADAMW.length, FM_MUON.length);
+  if (fmStep < max - 1) { fmStep++; drawFormulas(); }
+}
+function fmPrev() { if (fmStep >= 0) { fmStep--; drawFormulas(); } }
+function fmReset() {
+  fmStep = -1;
+  if (fmTimer) { clearInterval(fmTimer); fmTimer = null; }
+  document.getElementById('fmAutoBtn').classList.remove('on');
+  drawFormulas();
+}
+function fmAuto() {
+  const btn = document.getElementById('fmAutoBtn');
+  if (fmTimer) { clearInterval(fmTimer); fmTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  fmStep = -1;
+  const max = Math.max(FM_ADAM.length, FM_ADAMW.length, FM_MUON.length);
+  fmTimer = setInterval(() => {
+    fmStep++;
+    if (fmStep >= max) { clearInterval(fmTimer); fmTimer = null; btn.classList.remove('on'); }
+    drawFormulas();
+  }, 900);
+}
+
+// ============================================================
+// Panel 3: Memory / State comparison
+// ============================================================
+function drawMem() {
+  const W = 900, H = 420;
+  const ctx = setupCanvas('memCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const paramM = +document.getElementById('paramM').value || 7000;
+  const bytesPerParam = 2; // bf16 for params
+  const paramGB = paramM * 1e6 * bytesPerParam / 1e9;
+
+  // State per optimizer (in multiples of param count, fp32)
+  const items = [
+    { name: 'SGD+M', states: ['params (bf16)', 'momentum (fp32)'],
+      gb: paramM * 1e6 * (2 + 4) / 1e9, color: '#66bb6a',
+      stateX: 1, detail: 'momentum: 1× params (fp32)' },
+    { name: 'Adam', states: ['params (bf16)', 'm (fp32)', 'v (fp32)'],
+      gb: paramM * 1e6 * (2 + 4 + 4) / 1e9, color: '#e94560',
+      stateX: 2, detail: 'm + v: 2× params (fp32)' },
+    { name: 'AdamW', states: ['params (bf16)', 'm (fp32)', 'v (fp32)'],
+      gb: paramM * 1e6 * (2 + 4 + 4) / 1e9, color: '#4fc3f7',
+      stateX: 2, detail: 'm + v: 2× params (fp32) (同 Adam)' },
+    { name: 'Muon', states: ['params (bf16)', 'M (fp32)'],
+      gb: paramM * 1e6 * (2 + 4) / 1e9, color: '#ffd54f',
+      stateX: 1, detail: 'momentum only: 1× params (fp32)' },
+  ];
+
+  const maxGB = Math.max(...items.map(i => i.gb));
+  const left = 100, right = W - 40, top = 50, bottom = H - 60;
+  const barH = 40, gap = 30;
+  const totalH = items.length * (barH + gap) - gap;
+  const startY = top + (bottom - top - totalH) / 2;
+
+  // Title
+  ctx.fillStyle = '#888';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`训练显存占用 (${paramM}M params, bf16 params + fp32 states)`, W / 2, 30);
+
+  items.forEach((item, i) => {
+    const y = startY + i * (barH + gap);
+    const barW = (right - left) * (item.gb / maxGB);
+
+    // Label
+    ctx.fillStyle = item.color;
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(item.name, left - 12, y + barH / 2 + 5);
+
+    // Bar — split into params + states
+    const paramW = barW * (2 / (2 + item.stateX * 4)); // bf16 portion
+    const stateW = barW - paramW;
+
+    // Params portion
+    ctx.fillStyle = item.color;
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath();
+    ctx.roundRect(left, y, paramW, barH, [6, 0, 0, 6]);
+    ctx.fill();
+
+    // State portion
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.roundRect(left + paramW, y, stateW, barH, [0, 6, 6, 0]);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Value text
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${item.gb.toFixed(1)} GB`, left + barW + 10, y + barH / 2 + 4);
+
+    // Detail
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    ctx.fillText(item.detail, left + barW + 80, y + barH / 2 + 4);
+  });
+
+  // Legend
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = '#888';
+  ctx.fillRect(left, bottom + 15, 20, 12);
+  ctx.globalAlpha = 0.85;
+  ctx.fillRect(left + 100, bottom + 15, 20, 12);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('参数 (bf16)', left + 24, bottom + 25);
+  ctx.fillText('优化器状态 (fp32)', left + 124, bottom + 25);
+
+  // Info
+  const adamGB = items[1].gb;
+  const muonGB = items[3].gb;
+  const saving = ((1 - muonGB / adamGB) * 100).toFixed(1);
+  document.getElementById('memInfo').innerHTML =
+    `<b>${paramM}M 参数模型:</b> ` +
+    `Adam/AdamW 需要 <span class="c-adam">${adamGB.toFixed(1)} GB</span> (params + m + v), ` +
+    `Muon 需要 <span class="c-muon">${muonGB.toFixed(1)} GB</span> (params + M), ` +
+    `<b>节省 ${saving}%</b> 优化器状态显存。` +
+    `<br>注: Muon 仅适用于矩阵参数，实际需搭配 AdamW 处理 1D 参数（embedding, norm 层）。`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+initOptimizers();
+drawTraj();
+</script>
+</body>
+</html>

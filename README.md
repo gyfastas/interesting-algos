@@ -10,6 +10,7 @@
 | 002 | [LLM Beam Search](./algorithms/llm-beam-search/) | 搜索算法、解码策略 | ⭐⭐ |
 | 003 | [手写多头注意力 MHA/GQA/MLA](./algorithms/multi-head-attention/) | 深度学习、注意力机制 | ⭐⭐ |
 | 004 | [手写 LayerNorm & RMSNorm](./algorithms/rmsnorm-layernorm/) | 归一化、深度学习基础 | ⭐ |
+| 005 | [Adam / AdamW / Muon 优化器](./algorithms/adam-adamw-muon/) | 优化器、训练策略 | ⭐⭐ |
 
 ## 目录结构
 
