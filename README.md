@@ -11,6 +11,11 @@
 | 003 | [手写多头注意力 MHA/GQA/MLA](./algorithms/multi-head-attention/) | 深度学习、注意力机制 | ⭐⭐ |
 | 004 | [手写 LayerNorm & RMSNorm](./algorithms/rmsnorm-layernorm/) | 归一化、深度学习基础 | ⭐ |
 | 005 | [Adam / AdamW / Muon 优化器](./algorithms/adam-adamw-muon/) | 优化器、训练策略 | ⭐⭐ |
+| 006 | [手写 SwiGLU 激活函数](./algorithms/swiglu-activation/) | 激活函数、FFN 架构 | ⭐ |
+| 007 | [手写数值稳定的 Softmax](./algorithms/stable-softmax/) | 数值稳定性、Softmax | ⭐ |
+| 008 | [手写 Cross Entropy Loss](./algorithms/cross-entropy-loss/) | 损失函数、信息论 | ⭐ |
+| 009 | [PPO / GRPO / DPO 对比](./algorithms/ppo-grpo-dpo/) | RLHF、强化学习 | ⭐⭐⭐ |
+| 010 | [手写 MSE Loss](./algorithms/mse-loss/) | 损失函数、数值稳定性 | ⭐ |
 
 ## 目录结构
 

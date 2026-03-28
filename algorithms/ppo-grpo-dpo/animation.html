@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPO vs GRPO vs DPO — RLHF 对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e; color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn {
+    padding: 8px 22px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+  .panel { display: none; padding: 0 16px 28px; max-width: 1000px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  /* Formula cards */
+  .formula-row { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+  .formula-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 12px;
+    padding: 20px; flex: 1; min-width: 280px; max-width: 320px;
+  }
+  .formula-card h3 {
+    text-align: center; margin-bottom: 14px; font-size: 1em;
+    padding-bottom: 8px; border-bottom: 1px solid #0f3460;
+  }
+  .formula-card .formula {
+    background: #0d1b2a; border-radius: 8px; padding: 12px;
+    font-size: 0.82em; line-height: 1.8; margin-bottom: 12px;
+    border-left: 3px solid;
+  }
+  .formula-card .note {
+    font-size: 0.75em; color: #888; line-height: 1.6;
+  }
+  .formula-card .note b { color: #ccc; }
+  .c-ppo { color: #e94560; }
+  .c-dpo { color: #4fc3f7; }
+  .c-grpo { color: #ffd54f; }
+
+  /* Flow diagrams */
+  .flow-row { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+  .flow-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 12px;
+    padding: 16px; width: 300px;
+  }
+  .flow-card h3 { text-align: center; margin-bottom: 12px; font-size: 0.92em; }
+  .flow-card canvas { display: block; margin: 0 auto; }
+
+  /* Comparison table */
+  .cmp-table {
+    width: 100%; border-collapse: collapse; margin-top: 16px;
+    font-size: 0.82em;
+  }
+  .cmp-table th, .cmp-table td {
+    padding: 10px 12px; border: 1px solid #0f3460; text-align: center;
+  }
+  .cmp-table th { background: #0f3460; color: #fff; }
+  .cmp-table td { background: #16213e; }
+  .cmp-table tr:hover td { background: #1a2744; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 0.78em; font-weight: bold;
+  }
+  .badge-yes { background: #66bb6a33; color: #66bb6a; }
+  .badge-no { background: #e9456033; color: #e94560; }
+
+  canvas { display: block; }
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;
+  }
+  .controls button {
+    padding: 7px 16px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer; border-radius: 6px;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+
+<h1>PPO vs GRPO vs DPO</h1>
+<p class="subtitle">RLHF 三大算法原理对比</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">核心公式</button>
+  <button class="tab-btn" onclick="switchTab(1)">训练流程</button>
+  <button class="tab-btn" onclick="switchTab(2)">对比表格</button>
+  <button class="tab-btn" onclick="switchTab(3)">Clip 可视化</button>
+</div>
+
+<!-- ============== Panel 1: Core Formulas ============== -->
+<div class="panel active" id="panel-0">
+  <div class="formula-row">
+    <!-- PPO -->
+    <div class="formula-card">
+      <h3 class="c-ppo">PPO</h3>
+      <div class="formula" style="border-color:#e94560;">
+        L = -E[min(<br>
+        &nbsp;&nbsp;r<sub>t</sub> · A<sub>t</sub>,<br>
+        &nbsp;&nbsp;clip(r<sub>t</sub>, 1-ε, 1+ε) · A<sub>t</sub><br>
+        )]<br><br>
+        r<sub>t</sub> = π<sub>θ</sub>(a|s) / π<sub>old</sub>(a|s)<br>
+        A<sub>t</sub> = R<sub>t</sub> - V(s<sub>t</sub>)
+      </div>
+      <div class="note">
+        <b>r<sub>t</sub></b>: 重要性采样比（新旧策略概率比）<br>
+        <b>A<sub>t</sub></b>: Advantage = reward - value baseline<br>
+        <b>clip</b>: 限制更新幅度，防止策略崩溃<br>
+        <b>V(s)</b>: 需要额外的 value model
+      </div>
+    </div>
+
+    <!-- DPO -->
+    <div class="formula-card">
+      <h3 class="c-dpo">DPO</h3>
+      <div class="formula" style="border-color:#4fc3f7;">
+        L = -E[log σ(β · Δ)]<br><br>
+        Δ = log π<sub>θ</sub>(y<sub>w</sub>)/π<sub>ref</sub>(y<sub>w</sub>)<br>
+        &nbsp;&nbsp;- log π<sub>θ</sub>(y<sub>l</sub>)/π<sub>ref</sub>(y<sub>l</sub>)<br><br>
+        隐式 reward:<br>
+        r(y) = β · log π<sub>θ</sub>(y)/π<sub>ref</sub>(y)
+      </div>
+      <div class="note">
+        <b>y<sub>w</sub></b>: chosen (人类偏好的回答)<br>
+        <b>y<sub>l</sub></b>: rejected (人类不偏好的)<br>
+        <b>β</b>: 控制偏离 ref 的程度<br>
+        <b>无需 RM</b>: 直接从偏好对优化
+      </div>
+    </div>
+
+    <!-- GRPO -->
+    <div class="formula-card">
+      <h3 class="c-grpo">GRPO</h3>
+      <div class="formula" style="border-color:#ffd54f;">
+        L = -1/G · Σ min(<br>
+        &nbsp;&nbsp;r<sub>i</sub> · A<sub>i</sub>,<br>
+        &nbsp;&nbsp;clip(r<sub>i</sub>, 1-ε, 1+ε) · A<sub>i</sub><br>
+        ) + β · KL<br><br>
+        A<sub>i</sub> = (r<sub>i</sub> - mean) / std<br>
+        <span style="color:#888;">(组内 z-score，无需 Value)</span>
+      </div>
+      <div class="note">
+        <b>G</b>: 每个 prompt 采样 G 个响应<br>
+        <b>A<sub>i</sub></b>: 组内 reward 的 z-score<br>
+        <b>无需 Value Model</b>: 用组内排名代替<br>
+        <b>KL</b>: 逐 token 计算
+      </div>
+    </div>
+  </div>
+
+  <div class="info-box" style="margin-top:20px;">
+    <b>核心区别：</b><br>
+    <span class="c-ppo">PPO</span>: Advantage = R - V(s)，需要训练一个 Value Network<br>
+    <span class="c-dpo">DPO</span>: 把 RL 问题转化成分类问题——chosen vs rejected 的二元对比<br>
+    <span class="c-grpo">GRPO</span>: Advantage = 组内 z-score，每个 prompt 采样多个响应互相比较
+  </div>
+</div>
+
+<!-- ============== Panel 2: Training Flow ============== -->
+<div class="panel" id="panel-1">
+  <div class="flow-row">
+    <div class="flow-card">
+      <h3 class="c-ppo">PPO (4 个模型)</h3>
+      <canvas id="flowPPO" width="268" height="340"></canvas>
+    </div>
+    <div class="flow-card">
+      <h3 class="c-dpo">DPO (2 个模型)</h3>
+      <canvas id="flowDPO" width="268" height="340"></canvas>
+    </div>
+    <div class="flow-card">
+      <h3 class="c-grpo">GRPO (3 个模型)</h3>
+      <canvas id="flowGRPO" width="268" height="340"></canvas>
+    </div>
+  </div>
+  <div class="info-box" style="margin-top:16px;">
+    <b>显存占用对比 (以 7B 模型为例, bf16):</b><br>
+    <span class="c-ppo">PPO</span>: Policy(14GB) + Ref(14GB) + RM(14GB) + Value(14GB) ≈ <b>56GB</b> (不含优化器状态)<br>
+    <span class="c-dpo">DPO</span>: Policy(14GB) + Ref(14GB) ≈ <b>28GB</b><br>
+    <span class="c-grpo">GRPO</span>: Policy(14GB) + Ref(14GB) + RM(14GB) ≈ <b>42GB</b> (但省了 Value 的 14GB)
+  </div>
+</div>
+
+<!-- ============== Panel 3: Comparison Table ============== -->
+<div class="panel" id="panel-2">
+  <table class="cmp-table">
+    <tr>
+      <th>特性</th>
+      <th class="c-ppo">PPO</th>
+      <th class="c-dpo">DPO</th>
+      <th class="c-grpo">GRPO</th>
+    </tr>
+    <tr>
+      <td>Reward Model</td>
+      <td><span class="badge badge-yes">需要</span></td>
+      <td><span class="badge badge-no">不需要</span></td>
+      <td><span class="badge badge-yes">需要</span></td>
+    </tr>
+    <tr>
+      <td>Value Function</td>
+      <td><span class="badge badge-yes">需要</span></td>
+      <td><span class="badge badge-no">不需要</span></td>
+      <td><span class="badge badge-no">不需要</span></td>
+    </tr>
+    <tr>
+      <td>显存中模型数</td>
+      <td>4</td>
+      <td>2</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>在线/离线</td>
+      <td>在线采样</td>
+      <td>离线偏好对</td>
+      <td>在线采样 G 个</td>
+    </tr>
+    <tr>
+      <td>Advantage</td>
+      <td>R - V(s)</td>
+      <td>隐式 (chosen - rejected)</td>
+      <td>组内 z-score</td>
+    </tr>
+    <tr>
+      <td>KL 约束</td>
+      <td>序列级 penalty</td>
+      <td>隐式 (β 控制)</td>
+      <td>逐 token penalty</td>
+    </tr>
+    <tr>
+      <td>训练数据</td>
+      <td>prompt (在线生成)</td>
+      <td>(chosen, rejected) 对</td>
+      <td>prompt (在线生成 G 个)</td>
+    </tr>
+    <tr>
+      <td>实现复杂度</td>
+      <td>高</td>
+      <td>低</td>
+      <td>中</td>
+    </tr>
+    <tr>
+      <td>代表模型</td>
+      <td>ChatGPT, Claude</td>
+      <td>Llama 2-Chat, Zephyr</td>
+      <td>DeepSeek-R1</td>
+    </tr>
+    <tr>
+      <td>年份</td>
+      <td>2017</td>
+      <td>2023</td>
+      <td>2024</td>
+    </tr>
+  </table>
+
+  <div class="info-box" style="margin-top:16px;">
+    <b>三者共识:</b><br>
+    1. 都需要 <b>Reference Model</b> 作为锚点，防止偏离太远<br>
+    2. 都有 <b>KL 约束</b>（显式或隐式），控制探索幅度<br>
+    3. 本质都是 <b>相对比较</b>：好的回答 vs 差的回答<br>
+    4. 最终目标一致：π(y_good) > π(y_bad)
+  </div>
+</div>
+
+<!-- ============== Panel 4: PPO Clip Visualization ============== -->
+<div class="panel" id="panel-3">
+  <canvas id="clipCanvas" width="900" height="420"></canvas>
+  <div class="controls">
+    <button onclick="setAdv(1)" class="on" id="advPos">Advantage > 0 (好动作)</button>
+    <button onclick="setAdv(-1)" id="advNeg">Advantage < 0 (坏动作)</button>
+  </div>
+  <div class="info-box" id="clipInfo"></div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 1) drawFlows();
+  if (i === 3) drawClip();
+}
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+// ============================================================
+// Panel 2: Training Flow Diagrams
+// ============================================================
+function drawFlows() {
+  drawFlow('flowPPO', [
+    { label: 'Prompt', color: '#888' },
+    { label: 'Policy (LLM)', color: '#e94560' },
+    { label: 'Response', color: '#888' },
+    { label: 'Reward Model', color: '#ff9800' },
+    { label: 'Value Model', color: '#ab47bc' },
+    { label: 'Advantage = R-V', color: '#888' },
+    { label: 'PPO Clip Loss', color: '#e94560' },
+  ], '#e94560');
+
+  drawFlow('flowDPO', [
+    { label: 'Preference Pair', color: '#888' },
+    { label: '(chosen, rejected)', color: '#888' },
+    { label: 'Policy (LLM)', color: '#4fc3f7' },
+    { label: 'Ref Policy', color: '#78909c' },
+    { label: 'log-ratio diff', color: '#888' },
+    { label: 'DPO Loss = -log σ', color: '#4fc3f7' },
+  ], '#4fc3f7');
+
+  drawFlow('flowGRPO', [
+    { label: 'Prompt', color: '#888' },
+    { label: 'Policy → G 采样', color: '#ffd54f' },
+    { label: 'Reward Model', color: '#ff9800' },
+    { label: '{r₁,...,r_G} 打分', color: '#888' },
+    { label: 'A_i = z-score', color: '#888' },
+    { label: 'GRPO Clip Loss', color: '#ffd54f' },
+  ], '#ffd54f');
+}
+
+function drawFlow(canvasId, steps, accent) {
+  const W = 268, H = 340;
+  const ctx = setupCanvas(canvasId, W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const bw = 220, bh = 30;
+  const cx = W / 2;
+  const gap = (H - 20) / steps.length;
+
+  steps.forEach((s, i) => {
+    const y = 10 + i * gap;
+
+    // Connector
+    if (i > 0) {
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.moveTo(cx, y - gap + bh); ctx.lineTo(cx, y); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = accent;
+      ctx.beginPath(); ctx.moveTo(cx-4, y-2); ctx.lineTo(cx+4, y-2); ctx.lineTo(cx, y+3);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // Box
+    ctx.fillStyle = s.color === '#888' ? '#16213e' : s.color + '22';
+    ctx.strokeStyle = s.color === '#888' ? '#444' : s.color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(cx - bw/2, y, bw, bh, 6); ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = s.color === '#888' ? '#aaa' : s.color;
+    ctx.font = '11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(s.label, cx, y + bh/2);
+  });
+}
+
+// ============================================================
+// Panel 4: PPO Clip Visualization
+// ============================================================
+let advSign = 1;
+
+function setAdv(sign) {
+  advSign = sign;
+  document.getElementById('advPos').classList.toggle('on', sign > 0);
+  document.getElementById('advNeg').classList.toggle('on', sign < 0);
+  drawClip();
+}
+
+function drawClip() {
+  const W = 900, H = 420;
+  const ctx = setupCanvas('clipCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const eps = 0.2;
+  const rMin = 0, rMax = 2.5, yMin = -1.5, yMax = 1.5;
+  const left = 70, right = W - 30, top = 40, bottom = H - 40;
+
+  function toSx(r) { return left + (r - rMin) / (rMax - rMin) * (right - left); }
+  function toSy(y) { return bottom - (y - yMin) / (yMax - yMin) * (bottom - top); }
+
+  // Grid
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  for (let r = 0; r <= rMax; r += 0.5) {
+    const sx = toSx(r);
+    ctx.beginPath(); ctx.moveTo(sx, top); ctx.lineTo(sx, bottom); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(r.toFixed(1), sx, bottom + 14);
+  }
+  for (let y = -1; y <= 1; y += 0.5) {
+    const sy = toSy(y);
+    ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y.toFixed(1), left - 8, sy + 4);
+  }
+
+  // Axes
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(left, toSy(0)); ctx.lineTo(right, toSy(0)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(toSx(1), top); ctx.lineTo(toSx(1), bottom); ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#888'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('ratio r = π_θ / π_old', (left + right) / 2, bottom + 30);
+  ctx.fillText('r=1', toSx(1), bottom + 14);
+
+  // Clip region
+  const clipLeft = toSx(1 - eps), clipRight = toSx(1 + eps);
+  ctx.fillStyle = '#e9456010';
+  ctx.fillRect(clipLeft, top, clipRight - clipLeft, bottom - top);
+  ctx.strokeStyle = '#e9456044'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(clipLeft, top); ctx.lineTo(clipLeft, bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(clipRight, top); ctx.lineTo(clipRight, bottom); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#e9456066'; ctx.font = '10px monospace';
+  ctx.fillText(`1-ε=${(1-eps).toFixed(1)}`, clipLeft, top - 6);
+  ctx.fillText(`1+ε=${(1+eps).toFixed(1)}`, clipRight, top - 6);
+
+  const A = advSign;
+  const step = 0.01;
+
+  // Unclipped: r * A
+  ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 2; ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  let first = true;
+  for (let r = rMin + 0.01; r <= rMax; r += step) {
+    const y = r * A;
+    const sx = toSx(r), sy = toSy(y);
+    if (sy < top || sy > bottom) { first = true; continue; }
+    if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Clipped: clip(r, 1-ε, 1+ε) * A
+  ctx.strokeStyle = '#66bb6a'; ctx.lineWidth = 2; ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  first = true;
+  for (let r = rMin + 0.01; r <= rMax; r += step) {
+    const rc = Math.max(1 - eps, Math.min(1 + eps, r));
+    const y = rc * A;
+    const sx = toSx(r), sy = toSy(y);
+    if (sy < top || sy > bottom) { first = true; continue; }
+    if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // PPO objective: min(unclipped, clipped)
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  first = true;
+  for (let r = rMin + 0.01; r <= rMax; r += step) {
+    const unclipped = r * A;
+    const rc = Math.max(1 - eps, Math.min(1 + eps, r));
+    const clipped = rc * A;
+    const y = Math.min(unclipped, clipped);
+    const sx = toSx(r), sy = toSy(y);
+    if (sy < top - 5 || sy > bottom + 5) { first = true; continue; }
+    if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+
+  // Legend
+  const lx = right - 200, ly = top + 10;
+  const legends = [
+    { label: 'r·A (unclipped)', color: '#4fc3f7' },
+    { label: 'clip(r)·A', color: '#66bb6a' },
+    { label: 'min (PPO obj)', color: '#e94560' },
+  ];
+  legends.forEach((lg, i) => {
+    ctx.strokeStyle = lg.color; ctx.lineWidth = 2.5;
+    if (i < 2) { ctx.globalAlpha = 0.5; }
+    ctx.beginPath(); ctx.moveTo(lx, ly + i * 18); ctx.lineTo(lx + 20, ly + i * 18); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = lg.color; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(lg.label, lx + 25, ly + i * 18 + 4);
+  });
+
+  // Title
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`PPO Clipped Objective (A ${A > 0 ? '> 0' : '< 0'}, ε=${eps})`, W / 2, 24);
+
+  // Info
+  document.getElementById('clipInfo').innerHTML = A > 0
+    ? `<b>Advantage > 0 (好动作):</b> 我们想增大 ratio（增加该动作概率）。<br>当 r > 1+ε 时，clip 生效，梯度为 0 → <b>防止一步走太远</b>。<br>min 取的是 clipped 的值（更保守的那个）。`
+    : `<b>Advantage < 0 (坏动作):</b> 我们想减小 ratio（降低该动作概率）。<br>当 r < 1-ε 时，clip 生效，梯度为 0 → <b>不用继续降了</b>。<br>min 取的是 unclipped 的值（loss 更大的那个）。`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+drawClip();
+</script>
+</body>
+</html>

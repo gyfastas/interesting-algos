@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cross Entropy Loss — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e; color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn {
+    padding: 8px 22px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+  .panel { display: none; padding: 0 16px 28px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+  canvas { display: block; margin: 0 auto; }
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center;
+  }
+  .controls button {
+    padding: 7px 16px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer; border-radius: 6px;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+  .controls input[type=text] {
+    padding: 6px 10px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.85em; border-radius: 6px;
+  }
+  .controls label { font-size: 0.8em; color: #888; }
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7;
+  }
+  .c-red { color: #e94560; font-weight: bold; }
+  .c-blue { color: #4fc3f7; font-weight: bold; }
+  .c-green { color: #66bb6a; font-weight: bold; }
+  .c-yellow { color: #ffd54f; font-weight: bold; }
+  .slider-row {
+    display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 10px;
+  }
+  .slider-row label { font-size: 0.82em; color: #888; }
+  .slider-row input[type=range] { width: 200px; accent-color: #e94560; }
+  .slider-row .val { color: #e94560; font-weight: bold; min-width: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Cross Entropy Loss</h1>
+<p class="subtitle">分类损失函数 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">-log(p) 曲线</button>
+  <button class="tab-btn" onclick="switchTab(1)">交互计算器</button>
+  <button class="tab-btn" onclick="switchTab(2)">Label Smoothing</button>
+</div>
+
+<!-- ============== Panel 1: -log(p) curve ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="curveCanvas" width="900" height="420"></canvas>
+  <div class="info-box" id="curveInfo">
+    鼠标悬停在曲线上查看具体数值。<b>-log(p)</b> 在 p→0 时趋向 ∞，在 p=1 时等于 0。
+  </div>
+</div>
+
+<!-- ============== Panel 2: Interactive Calculator ============== -->
+<div class="panel" id="panel-1">
+  <div class="controls" style="margin-bottom:14px;">
+    <label>logits:</label>
+    <input type="text" id="ceLogits" value="2.0, 1.0, 0.1, -0.5" style="width:240px;">
+    <label>target:</label>
+    <input type="text" id="ceTarget" value="0" style="width:50px; text-align:center;">
+    <button onclick="drawCalc()">计算</button>
+  </div>
+  <canvas id="calcCanvas" width="900" height="420"></canvas>
+  <div class="info-box" id="calcInfo"></div>
+</div>
+
+<!-- ============== Panel 3: Label Smoothing ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="lsCanvas" width="900" height="400"></canvas>
+  <div class="slider-row">
+    <label>smoothing α =</label>
+    <input type="range" id="lsSlider" min="0" max="0.5" step="0.01" value="0.1" oninput="drawLS()">
+    <span class="val" id="lsVal">0.10</span>
+  </div>
+  <div class="controls">
+    <button onclick="document.getElementById('lsSlider').value=0;drawLS()">α=0 (hard)</button>
+    <button onclick="document.getElementById('lsSlider').value=0.1;drawLS()">α=0.1 (常用)</button>
+    <button onclick="document.getElementById('lsSlider').value=0.3;drawLS()">α=0.3 (强)</button>
+  </div>
+  <div class="info-box" id="lsInfo"></div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 0) drawCurve();
+  if (i === 1) drawCalc();
+  if (i === 2) drawLS();
+}
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+function softmax(x) {
+  const m = Math.max(...x);
+  const exps = x.map(xi => Math.exp(xi - m));
+  const s = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / s);
+}
+
+function logSumExp(x) {
+  const m = Math.max(...x);
+  return m + Math.log(x.reduce((a, xi) => a + Math.exp(xi - m), 0));
+}
+
+// ============================================================
+// Panel 1: -log(p) curve
+// ============================================================
+function drawCurve() {
+  const W = 900, H = 420;
+  const ctx = setupCanvas('curveCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const pMin = 0.001, pMax = 1.0, yMin = 0, yMax = 7;
+  const left = 60, right = W - 30, top = 30, bottom = H - 40;
+
+  function toSx(p) { return left + (p - pMin) / (pMax - pMin) * (right - left); }
+  function toSy(y) { return bottom - (y - yMin) / (yMax - yMin) * (bottom - top); }
+
+  // Grid
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  for (let p = 0; p <= 1; p += 0.1) {
+    const sx = toSx(p);
+    ctx.beginPath(); ctx.moveTo(sx, top); ctx.lineTo(sx, bottom); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(p.toFixed(1), sx, bottom + 14);
+  }
+  for (let y = 0; y <= yMax; y += 1) {
+    const sy = toSy(y);
+    ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y, left - 8, sy + 4);
+  }
+
+  // Axes
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(left, top); ctx.lineTo(left, bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(left, bottom); ctx.lineTo(right, bottom); ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = '#888'; ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('p (target probability)', (left + right) / 2, bottom + 30);
+  ctx.save(); ctx.translate(15, (top + bottom) / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('-log(p) = CE loss', 0, 0); ctx.restore();
+
+  // -log(p) curve
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  let first = true;
+  for (let p = pMin; p <= pMax; p += 0.002) {
+    const y = -Math.log(p);
+    const sx = toSx(p), sy = toSy(y);
+    if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+
+  // Focal loss curves
+  [1, 2, 5].forEach((gamma, idx) => {
+    const colors = ['#4fc3f7', '#66bb6a', '#ffd54f'];
+    ctx.strokeStyle = colors[idx]; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    first = true;
+    for (let p = pMin; p <= pMax; p += 0.002) {
+      const y = -Math.pow(1 - p, gamma) * Math.log(p);
+      const sx = toSx(p), sy = toSy(Math.min(y, yMax));
+      if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  // Key points
+  const keyPoints = [
+    { p: 1.0, label: 'p=1: loss=0', desc: '完美预测' },
+    { p: 0.5, label: 'p=0.5: loss=0.69', desc: '50% 确信' },
+    { p: 0.1, label: 'p=0.1: loss=2.30', desc: '很不确信' },
+  ];
+  keyPoints.forEach(pt => {
+    const sx = toSx(pt.p), sy = toSy(-Math.log(pt.p));
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#e94560'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#ccc'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(pt.label, sx + 8, sy - 2);
+  });
+
+  // Legend
+  const legends = [
+    { label: 'CE: -log(p)', color: '#e94560', dash: false },
+    { label: 'Focal γ=1', color: '#4fc3f7', dash: true },
+    { label: 'Focal γ=2', color: '#66bb6a', dash: true },
+    { label: 'Focal γ=5', color: '#ffd54f', dash: true },
+  ];
+  legends.forEach((lg, i) => {
+    const lx = right - 300 + i * 0, ly = top + 10 + i * 18;
+    ctx.strokeStyle = lg.color; ctx.lineWidth = 2;
+    if (lg.dash) ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(right - 160, ly); ctx.lineTo(right - 140, ly); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = lg.color; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(lg.label, right - 135, ly + 4);
+  });
+}
+
+// Mouse hover
+const curveCanvasEl = document.getElementById('curveCanvas');
+curveCanvasEl.addEventListener('mousemove', (e) => {
+  const rect = curveCanvasEl.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const left = 60, right = 900 - 30;
+  const p = 0.001 + (mx - left) / (right - left) * 0.999;
+  if (p < 0.001 || p > 1) return;
+  const ce = -Math.log(p);
+  const focal2 = -Math.pow(1 - p, 2) * Math.log(p);
+  document.getElementById('curveInfo').innerHTML =
+    `<b>p = ${p.toFixed(4)}</b>: ` +
+    `<span class="c-red">CE = ${ce.toFixed(4)}</span>, ` +
+    `<span class="c-green">Focal(γ=2) = ${focal2.toFixed(4)}</span> ` +
+    `(Focal 对简单样本 p→1 的 loss 压低了 <span class="c-yellow">${((1 - focal2/ce) * 100).toFixed(1)}%</span>)`;
+});
+
+// ============================================================
+// Panel 2: Interactive Calculator
+// ============================================================
+function drawCalc() {
+  const logitsRaw = document.getElementById('ceLogits').value;
+  const z = logitsRaw.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+  const y = parseInt(document.getElementById('ceTarget').value) || 0;
+  if (z.length < 2 || y < 0 || y >= z.length) return;
+
+  const W = 900, H = 420;
+  const ctx = setupCanvas('calcCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const C = z.length;
+  const m = Math.max(...z);
+  const shifted = z.map(zi => zi - m);
+  const exps = shifted.map(s => Math.exp(s));
+  const sumExp = exps.reduce((a, b) => a + b, 0);
+  const probs = softmax(z);
+  const lse = logSumExp(z);
+  const ce = -z[y] + lse;
+
+  // Layout: step by step, left to right
+  const steps = [
+    { label: 'logits z', data: z, fmt: v => v.toFixed(1) },
+    { label: 'z - max', data: shifted, fmt: v => v.toFixed(2) },
+    { label: 'exp(z-max)', data: exps, fmt: v => v.toFixed(4) },
+    { label: 'softmax', data: probs, fmt: v => v.toFixed(4) },
+  ];
+
+  const left = 20, top = 50, colW = (W - 40) / steps.length;
+  const rowH = 28;
+
+  // Header
+  steps.forEach((step, si) => {
+    const cx = left + si * colW + colW / 2;
+    ctx.fillStyle = '#888'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(step.label, cx, top - 10);
+
+    // Arrow
+    if (si > 0) {
+      const ax = left + si * colW - 2;
+      ctx.fillStyle = '#444'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('→', ax, top - 10);
+    }
+  });
+
+  // Rows
+  for (let i = 0; i < C; i++) {
+    const ry = top + 10 + i * rowH;
+    const isTarget = i === y;
+
+    // Highlight target row
+    if (isTarget) {
+      ctx.fillStyle = '#e9456015';
+      ctx.fillRect(left, ry - 4, W - 40, rowH - 2);
+    }
+
+    // Class label
+    ctx.fillStyle = isTarget ? '#e94560' : '#555';
+    ctx.font = `${isTarget ? 'bold ' : ''}11px monospace`;
+    ctx.textAlign = 'left';
+
+    steps.forEach((step, si) => {
+      const cx = left + si * colW + colW / 2;
+      ctx.fillStyle = isTarget ? '#e94560' : '#aaa';
+      ctx.font = `${isTarget ? 'bold ' : ''}11px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(step.fmt(step.data[i]), cx, ry + 10);
+    });
+
+    // Target marker
+    if (isTarget) {
+      ctx.fillStyle = '#e94560'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+      ctx.fillText('← target', left + steps.length * colW - 30, ry + 10);
+    }
+  }
+
+  // Computation summary below
+  const sy = top + 20 + C * rowH + 20;
+  ctx.fillStyle = '#444'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(left, sy - 10); ctx.lineTo(W - 20, sy - 10); ctx.stroke();
+
+  const lines = [
+    { text: `max(z) = ${m.toFixed(2)}`, color: '#ffd54f' },
+    { text: `LogSumExp = ${m.toFixed(2)} + log(${sumExp.toFixed(4)}) = ${lse.toFixed(4)}`, color: '#4fc3f7' },
+    { text: `CE = -z[${y}] + LSE = -(${z[y].toFixed(2)}) + ${lse.toFixed(4)} = ${ce.toFixed(4)}`, color: '#e94560' },
+    { text: `等价于: -log(softmax[${y}]) = -log(${probs[y].toFixed(4)}) = ${(-Math.log(probs[y])).toFixed(4)}`, color: '#66bb6a' },
+  ];
+
+  lines.forEach((line, i) => {
+    ctx.fillStyle = line.color;
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(line.text, left + 20, sy + 10 + i * 22);
+  });
+
+  // Gradient
+  const grads = probs.map((p, i) => i === y ? p - 1 : p);
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace';
+  ctx.fillText(`梯度 ∂CE/∂z = softmax - one_hot = [${grads.map(g => g.toFixed(4)).join(', ')}]`, left + 20, sy + 10 + lines.length * 22 + 10);
+
+  // Info
+  const ppl = Math.exp(ce);
+  document.getElementById('calcInfo').innerHTML =
+    `<span class="c-red">CE Loss = ${ce.toFixed(4)}</span>, ` +
+    `<span class="c-blue">Perplexity = ${ppl.toFixed(2)}</span>, ` +
+    `<span class="c-green">p(target) = ${(probs[y] * 100).toFixed(2)}%</span>`;
+}
+
+// ============================================================
+// Panel 3: Label Smoothing
+// ============================================================
+function drawLS() {
+  const alpha = parseFloat(document.getElementById('lsSlider').value);
+  document.getElementById('lsVal').textContent = alpha.toFixed(2);
+
+  const W = 900, H = 400;
+  const ctx = setupCanvas('lsCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const C = 5;
+  const target = 1;
+
+  // Hard labels
+  const hardLabels = Array(C).fill(0);
+  hardLabels[target] = 1;
+
+  // Smooth labels
+  const smoothLabels = Array(C).fill(alpha / C);
+  smoothLabels[target] = 1 - alpha + alpha / C;
+
+  const left = 80, right = W - 40, top = 50, bottom = H - 50;
+  const barW = Math.min(60, (right - left) / C / 2 - 10);
+  const gap = (right - left) / C;
+
+  // Y axis
+  const yMax = 1.1;
+  function toSy(v) { return bottom - (v / yMax) * (bottom - top); }
+
+  // Grid
+  for (let y = 0; y <= 1; y += 0.25) {
+    const sy = toSy(y);
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y.toFixed(2), left - 8, sy + 4);
+  }
+
+  // Bars
+  for (let i = 0; i < C; i++) {
+    const cx = left + i * gap + gap / 2;
+    const isTarget = i === target;
+
+    // Hard label bar
+    const hx = cx - barW - 2;
+    const hh = hardLabels[i] / yMax * (bottom - top);
+    ctx.fillStyle = '#4fc3f7';
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(hx, bottom - hh, barW, hh);
+    ctx.globalAlpha = 1;
+
+    // Smooth label bar
+    const sx = cx + 2;
+    const sh = smoothLabels[i] / yMax * (bottom - top);
+    ctx.fillStyle = '#e94560';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(sx, bottom - sh, barW, sh);
+    ctx.globalAlpha = 1;
+
+    // Values
+    ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    if (hardLabels[i] > 0) {
+      ctx.fillStyle = '#4fc3f7';
+      ctx.fillText(hardLabels[i].toFixed(2), hx + barW / 2, bottom - hh - 5);
+    }
+    ctx.fillStyle = '#e94560';
+    ctx.fillText(smoothLabels[i].toFixed(3), sx + barW / 2, bottom - sh - 5);
+
+    // Class label
+    ctx.fillStyle = isTarget ? '#fff' : '#888';
+    ctx.font = `${isTarget ? 'bold ' : ''}11px monospace`;
+    ctx.fillText(`class ${i}${isTarget ? ' ←' : ''}`, cx, bottom + 16);
+  }
+
+  // Legend
+  ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#4fc3f7'; ctx.fillRect(left, top - 25, 14, 14);
+  ctx.fillStyle = '#ccc'; ctx.fillText('Hard label (one-hot)', left + 20, top - 14);
+  ctx.fillStyle = '#e94560'; ctx.fillRect(left + 200, top - 25, 14, 14);
+  ctx.fillStyle = '#ccc'; ctx.fillText(`Smooth label (α=${alpha.toFixed(2)})`, left + 220, top - 14);
+
+  // Title
+  ctx.fillStyle = '#888'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`Label Smoothing: target=class ${target}, C=${C}`, W / 2, 24);
+
+  // Compute CE for both
+  const logits = [1.5, 2.5, 0.5, -0.5, 0.0]; // example logits
+  const probs = softmax(logits);
+  const hardCE = -Math.log(probs[target]);
+  const smoothCE = smoothLabels.reduce((a, yi, i) => a + (yi > 0 ? -yi * Math.log(probs[i] + 1e-12) : 0), 0);
+
+  document.getElementById('lsInfo').innerHTML =
+    `<b>α = ${alpha.toFixed(2)}</b>: ` +
+    `target 类目标 = <span class="c-red">${smoothLabels[target].toFixed(3)}</span> (原来 1.0), ` +
+    `其他类目标 = <span class="c-red">${(alpha / C).toFixed(4)}</span> (原来 0.0)<br>` +
+    `<b>示例 logits=${JSON.stringify(logits)}:</b> ` +
+    `<span class="c-blue">Hard CE = ${hardCE.toFixed(4)}</span>, ` +
+    `<span class="c-red">Smooth CE = ${smoothCE.toFixed(4)}</span><br>` +
+    `<b>效果:</b> label smoothing 让模型不追求 100% 确信，保留对其他类的"留意"，提升泛化。`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+drawCurve();
+</script>
+</body>
+</html>

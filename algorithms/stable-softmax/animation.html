@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Softmax 数值稳定性 — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn {
+    padding: 8px 22px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+
+  .panel { display: none; padding: 0 16px 28px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  canvas { display: block; margin: 0 auto; }
+
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center;
+  }
+  .controls button, .controls select {
+    padding: 7px 16px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer; border-radius: 6px;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+  .controls input[type=text], .controls input[type=number] {
+    padding: 6px 10px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.85em; border-radius: 6px; text-align: center;
+  }
+
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7;
+  }
+  .c-red { color: #e94560; font-weight: bold; }
+  .c-blue { color: #4fc3f7; font-weight: bold; }
+  .c-green { color: #66bb6a; font-weight: bold; }
+  .c-yellow { color: #ffd54f; font-weight: bold; }
+
+  .slider-row {
+    display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 10px;
+  }
+  .slider-row label { font-size: 0.82em; color: #888; }
+  .slider-row input[type=range] { width: 200px; accent-color: #e94560; }
+  .slider-row .val { color: #e94560; font-weight: bold; min-width: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Softmax 数值稳定性</h1>
+<p class="subtitle">exp 溢出问题与 -max 技巧 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">溢出演示</button>
+  <button class="tab-btn" onclick="switchTab(1)">交互计算器</button>
+  <button class="tab-btn" onclick="switchTab(2)">Temperature</button>
+</div>
+
+<!-- ============== Panel 1: Overflow Demo ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="overflowCanvas" width="900" height="460"></canvas>
+  <div class="controls">
+    <label style="font-size:0.8em;color:#888;">预设:</label>
+    <button onclick="setOverflow([2,1,0.1])">正常 [2,1,0.1]</button>
+    <button onclick="setOverflow([100,0,-100])">中等 [100,0,-100]</button>
+    <button onclick="setOverflow([1000,1001,1002])">溢出 [1000,1001,1002]</button>
+    <button onclick="setOverflow([800,800,800])">全相同大值 [800,800,800]</button>
+  </div>
+  <div class="info-box" id="overflowInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Interactive Calculator ============== -->
+<div class="panel" id="panel-1">
+  <div class="controls" style="margin-bottom:14px;">
+    <label style="font-size:0.8em;color:#888;">logits (逗号分隔):</label>
+    <input type="text" id="calcInput" value="3.0, 1.0, 0.2, -1.5, 2.0" style="width:300px;">
+    <button onclick="drawCalc()">计算</button>
+  </div>
+  <canvas id="calcCanvas" width="900" height="400"></canvas>
+  <div class="info-box" id="calcInfo"></div>
+</div>
+
+<!-- ============== Panel 3: Temperature ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="tempCanvas" width="900" height="400"></canvas>
+  <div class="slider-row">
+    <label>Temperature T =</label>
+    <input type="range" id="tempSlider" min="0.05" max="5" step="0.05" value="1" oninput="drawTemp()">
+    <span class="val" id="tempVal">1.00</span>
+  </div>
+  <div class="controls">
+    <button onclick="document.getElementById('tempSlider').value=0.1;drawTemp()">T=0.1 (尖锐)</button>
+    <button onclick="document.getElementById('tempSlider').value=1;drawTemp()">T=1.0 (标准)</button>
+    <button onclick="document.getElementById('tempSlider').value=3;drawTemp()">T=3.0 (平滑)</button>
+  </div>
+  <div class="info-box" id="tempInfo"></div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 0) drawOverflow();
+  if (i === 1) drawCalc();
+  if (i === 2) drawTemp();
+}
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+// ============================================================
+// Math
+// ============================================================
+function softmaxStable(x) {
+  const m = Math.max(...x);
+  const exps = x.map(xi => Math.exp(xi - m));
+  const total = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / total);
+}
+
+function softmaxNaive(x) {
+  // Returns null if overflow
+  try {
+    const exps = x.map(xi => {
+      if (xi > 709) return Infinity;
+      return Math.exp(xi);
+    });
+    if (exps.some(e => !isFinite(e))) return null;
+    const total = exps.reduce((a, b) => a + b, 0);
+    if (!isFinite(total)) return null;
+    return exps.map(e => e / total);
+  } catch { return null; }
+}
+
+function expSafe(x) {
+  if (x > 709) return Infinity;
+  if (x < -745) return 0;
+  return Math.exp(x);
+}
+
+// ============================================================
+// Panel 1: Overflow demonstration
+// ============================================================
+let overflowData = [1000, 1001, 1002];
+
+function setOverflow(x) { overflowData = x; drawOverflow(); }
+
+function drawOverflow() {
+  const W = 900, H = 460;
+  const ctx = setupCanvas('overflowCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const x = overflowData;
+  const n = x.length;
+  const m = Math.max(...x);
+  const shifted = x.map(xi => xi - m);
+
+  // Layout: two columns
+  const colW = W / 2 - 20;
+  const leftX = 20, rightX = W / 2 + 10;
+  const topY = 20;
+
+  // === Left: Naive ===
+  ctx.fillStyle = '#e94560';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Naive Softmax', leftX + colW / 2, topY + 10);
+
+  const naiveResult = softmaxNaive(x);
+  const overflow = naiveResult === null;
+
+  let yOff = topY + 40;
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+
+  // Step 1: exp
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('Step 1: exp(x_i)', leftX, yOff); yOff += 24;
+
+  x.forEach((xi, i) => {
+    const e = expSafe(xi);
+    const eStr = isFinite(e) ? e.toExponential(2) : 'Infinity!';
+    const isOF = !isFinite(e);
+    ctx.fillStyle = isOF ? '#e94560' : '#888';
+    ctx.font = `${isOF ? 'bold ' : ''}11px monospace`;
+    ctx.fillText(`  exp(${xi}) = ${eStr}`, leftX, yOff);
+    if (isOF) {
+      ctx.fillStyle = '#e9456088';
+      ctx.fillRect(leftX + 180, yOff - 10, 100, 14);
+      ctx.fillStyle = '#fff';
+      ctx.fillText('OVERFLOW', leftX + 185, yOff);
+    }
+    yOff += 20;
+  });
+
+  yOff += 10;
+  ctx.fillStyle = '#aaa'; ctx.font = '12px monospace';
+  ctx.fillText('Step 2: sum', leftX, yOff); yOff += 22;
+  const naiveSum = x.reduce((a, xi) => a + expSafe(xi), 0);
+  const sumStr = isFinite(naiveSum) ? naiveSum.toExponential(2) : 'Infinity!';
+  ctx.fillStyle = !isFinite(naiveSum) ? '#e94560' : '#888';
+  ctx.font = '11px monospace';
+  ctx.fillText(`  Σ exp(x_i) = ${sumStr}`, leftX, yOff); yOff += 28;
+
+  ctx.fillStyle = '#aaa'; ctx.font = '12px monospace';
+  ctx.fillText('Step 3: normalize', leftX, yOff); yOff += 22;
+  if (overflow) {
+    ctx.fillStyle = '#e94560'; ctx.font = 'bold 12px monospace';
+    ctx.fillText('  结果: NaN (inf/inf)', leftX, yOff);
+    yOff += 24;
+    // Draw big X
+    ctx.strokeStyle = '#e9456066'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(leftX + 40, topY + 70); ctx.lineTo(leftX + colW - 40, yOff); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(leftX + colW - 40, topY + 70); ctx.lineTo(leftX + 40, yOff); ctx.stroke();
+  } else {
+    naiveResult.forEach((p, i) => {
+      ctx.fillStyle = '#888'; ctx.font = '11px monospace';
+      ctx.fillText(`  p[${i}] = ${p.toFixed(6)}`, leftX, yOff); yOff += 18;
+    });
+  }
+
+  // === Right: Stable ===
+  ctx.fillStyle = '#66bb6a';
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Stable Softmax (-max)', rightX + colW / 2, topY + 10);
+
+  yOff = topY + 40;
+  ctx.textAlign = 'left';
+
+  // Step 0: max
+  ctx.fillStyle = '#ffd54f'; ctx.font = '12px monospace';
+  ctx.fillText(`Step 0: max = ${m}`, rightX, yOff); yOff += 24;
+
+  // Step 1: shift & exp
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('Step 1: exp(x_i - max)', rightX, yOff); yOff += 24;
+
+  shifted.forEach((si, i) => {
+    const e = Math.exp(si);
+    ctx.fillStyle = '#66bb6a'; ctx.font = '11px monospace';
+    ctx.fillText(`  exp(${x[i]} - ${m}) = exp(${si}) = ${e.toFixed(6)}`, rightX, yOff);
+    yOff += 20;
+  });
+
+  yOff += 10;
+  ctx.fillStyle = '#aaa'; ctx.font = '12px monospace';
+  ctx.fillText('Step 2: sum', rightX, yOff); yOff += 22;
+  const stableExps = shifted.map(s => Math.exp(s));
+  const stableSum = stableExps.reduce((a, b) => a + b, 0);
+  ctx.fillStyle = '#66bb6a'; ctx.font = '11px monospace';
+  ctx.fillText(`  Σ exp(x_i - max) = ${stableSum.toFixed(6)}`, rightX, yOff); yOff += 28;
+
+  ctx.fillStyle = '#aaa'; ctx.font = '12px monospace';
+  ctx.fillText('Step 3: normalize', rightX, yOff); yOff += 22;
+  const stableResult = softmaxStable(x);
+  stableResult.forEach((p, i) => {
+    ctx.fillStyle = '#66bb6a'; ctx.font = '11px monospace';
+    ctx.fillText(`  p[${i}] = ${p.toFixed(6)}`, rightX, yOff); yOff += 18;
+  });
+
+  yOff += 6;
+  ctx.fillStyle = '#66bb6a'; ctx.font = '11px monospace';
+  ctx.fillText(`  sum = ${stableResult.reduce((a,b)=>a+b,0).toFixed(10)} ✓`, rightX, yOff);
+
+  // Divider
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W/2, topY); ctx.lineTo(W/2, H - 10); ctx.stroke();
+
+  // Bar chart at bottom
+  const barTop = H - 100, barH = 70;
+  const barW = 60, barGap = 20;
+  const totalBarW = n * barW + (n - 1) * barGap;
+
+  if (!overflow && naiveResult) {
+    // Both results as bars
+  }
+  // Stable result bars
+  const barStartX = rightX + (colW - totalBarW) / 2;
+  stableResult.forEach((p, i) => {
+    const bx = barStartX + i * (barW + barGap);
+    const bh = p * barH * 3; // scale
+    ctx.fillStyle = '#66bb6a';
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(bx, barTop + barH - bh, barW, bh);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#aaa'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`${(p*100).toFixed(1)}%`, bx + barW/2, barTop + barH + 14);
+    ctx.fillText(`x=${x[i]}`, bx + barW/2, barTop - 6);
+  });
+
+  // Info
+  document.getElementById('overflowInfo').innerHTML = overflow
+    ? `<span class="c-red">Naive 溢出!</span> exp(${m}) = Infinity → 结果全是 NaN。<span class="c-green">Stable 版本</span>: 减去 max=${m} 后所有 exp 参数 ≤ 0，安全计算。`
+    : `当前输入无溢出风险。两种方法结果一致。<b>试试 [1000,1001,1002] 看溢出效果。</b>`;
+}
+
+// ============================================================
+// Panel 2: Interactive Calculator
+// ============================================================
+function drawCalc() {
+  const raw = document.getElementById('calcInput').value;
+  const x = raw.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+  if (x.length < 2) return;
+
+  const W = 900, H = 400;
+  const ctx = setupCanvas('calcCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const m = Math.max(...x);
+  const shifted = x.map(xi => xi - m);
+  const result = softmaxStable(x);
+  const n = x.length;
+
+  const left = 60, right = W - 20, top = 30, bottom = H - 50;
+  const barW = Math.min(80, (right - left) / n - 8);
+  const totalBarW = n * barW + (n - 1) * 8;
+  const startX = left + ((right - left) - totalBarW) / 2;
+
+  // Three rows of bars: logits, shifted, softmax
+  const rowH = (bottom - top) / 3 - 10;
+  const rows = [
+    { label: 'logits x', data: x, color: '#888' },
+    { label: 'x - max', data: shifted, color: '#4fc3f7' },
+    { label: 'softmax', data: result, color: '#e94560' },
+  ];
+
+  rows.forEach((row, ri) => {
+    const baseY = top + ri * (rowH + 15);
+    const midY = baseY + rowH / 2;
+
+    // Label
+    ctx.fillStyle = row.color; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(row.label, left - 8, midY + 4);
+
+    // Find range
+    const absMax = Math.max(...row.data.map(Math.abs), 0.01);
+
+    // Zero line
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(startX, midY); ctx.lineTo(startX + totalBarW, midY); ctx.stroke();
+
+    row.data.forEach((v, i) => {
+      const bx = startX + i * (barW + 8);
+      const bh = (v / absMax) * (rowH / 2 - 6);
+
+      ctx.fillStyle = row.color;
+      ctx.globalAlpha = 0.7;
+      if (v >= 0) ctx.fillRect(bx, midY - bh, barW, bh);
+      else ctx.fillRect(bx, midY, barW, -bh);
+      ctx.globalAlpha = 1;
+
+      // Value
+      ctx.fillStyle = '#ddd'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+      const fmt = ri === 2 ? v.toFixed(3) : v.toFixed(1);
+      const ty = v >= 0 ? midY - bh - 5 : midY - bh + 10;
+      ctx.fillText(fmt, bx + barW / 2, ty);
+
+      // Index
+      if (ri === 0) {
+        ctx.fillStyle = '#555'; ctx.font = '9px monospace';
+        ctx.fillText(i, bx + barW / 2, baseY - 4);
+      }
+    });
+
+    // Arrow between rows
+    if (ri < 2) {
+      const ay = baseY + rowH + 5;
+      ctx.fillStyle = '#555'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(ri === 0 ? `- max(${m})` : 'exp(·) / Σ', startX + totalBarW / 2, ay + 4);
+    }
+  });
+
+  // Info
+  const entropy = -result.reduce((a, p) => a + (p > 1e-10 ? p * Math.log2(p) : 0), 0);
+  document.getElementById('calcInfo').innerHTML =
+    `<b>输入:</b> [${x.map(v => v.toFixed(1)).join(', ')}] → ` +
+    `<b>max</b> = <span class="c-yellow">${m}</span> → ` +
+    `<b>softmax</b> = [${result.map(v => v.toFixed(4)).join(', ')}]<br>` +
+    `<b>sum</b> = ${result.reduce((a,b)=>a+b,0).toFixed(10)}, ` +
+    `<b>entropy</b> = ${entropy.toFixed(3)} bits (uniform would be ${Math.log2(n).toFixed(3)})`;
+}
+
+// ============================================================
+// Panel 3: Temperature
+// ============================================================
+const tempLogits = [3.0, 2.0, 1.5, 0.5, -0.5, -1.0, 0.0, 1.0];
+
+function drawTemp() {
+  const T = parseFloat(document.getElementById('tempSlider').value);
+  document.getElementById('tempVal').textContent = T.toFixed(2);
+
+  const W = 900, H = 400;
+  const ctx = setupCanvas('tempCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const x = tempLogits;
+  const n = x.length;
+  const scaled = x.map(xi => xi / T);
+  const result = softmaxStable(scaled);
+  const uniform = 1 / n;
+
+  const left = 60, right = W - 20, top = 40, bottom = H - 50;
+  const barW = Math.min(80, (right - left) / n - 12);
+  const totalBarW = n * barW + (n - 1) * 12;
+  const startX = left + ((right - left) - totalBarW) / 2;
+
+  // Max bar height
+  const maxP = Math.max(...result, uniform);
+  const barMaxH = bottom - top - 30;
+
+  // Uniform line
+  const uniformY = bottom - (uniform / maxP) * barMaxH;
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(startX, uniformY); ctx.lineTo(startX + totalBarW, uniformY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`uniform = ${(uniform * 100).toFixed(1)}%`, startX + totalBarW + 5, uniformY + 4);
+
+  result.forEach((p, i) => {
+    const bx = startX + i * (barW + 12);
+    const bh = (p / maxP) * barMaxH;
+
+    // Color gradient: more concentrated = more red
+    const ratio = p / Math.max(...result);
+    const r = Math.floor(100 + ratio * 133);
+    const g = Math.floor(50 + (1 - ratio) * 150);
+    const b = Math.floor(80 + (1 - ratio) * 80);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(bx, bottom - bh, barW, bh);
+    ctx.globalAlpha = 1;
+
+    // Percentage
+    ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`${(p * 100).toFixed(1)}%`, bx + barW / 2, bottom - bh - 6);
+
+    // Logit value
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+    ctx.fillText(`x=${x[i]}`, bx + barW / 2, bottom + 14);
+  });
+
+  // Title
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`softmax(x / T),  T = ${T.toFixed(2)}`, W / 2, 24);
+
+  // Info
+  const entropy = -result.reduce((a, p) => a + (p > 1e-10 ? p * Math.log2(p) : 0), 0);
+  const maxIdx = result.indexOf(Math.max(...result));
+  let desc;
+  if (T < 0.3) desc = 'T→0: 趋近 argmax，几乎是 one-hot 分布';
+  else if (T < 0.8) desc = 'T<1: 比标准 softmax 更"尖锐"，高概率更集中';
+  else if (T < 1.5) desc = 'T≈1: 标准 softmax';
+  else if (T < 3) desc = 'T>1: 比标准更"平滑"，概率更分散';
+  else desc = 'T→∞: 趋近均匀分布';
+
+  document.getElementById('tempInfo').innerHTML =
+    `<b>logits:</b> [${x.join(', ')}]<br>` +
+    `<b>T = ${T.toFixed(2)}</b> — ${desc}<br>` +
+    `<b>argmax:</b> x[${maxIdx}]=${x[maxIdx]} → p=${(result[maxIdx]*100).toFixed(1)}%, ` +
+    `<b>entropy:</b> ${entropy.toFixed(3)} / ${Math.log2(n).toFixed(3)} bits`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+drawOverflow();
+</script>
+</body>
+</html>

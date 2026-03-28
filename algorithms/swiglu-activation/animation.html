@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SwiGLU 激活函数 — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    min-height: 100vh;
+  }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn {
+    padding: 8px 22px; border: 2px solid #0f3460; background: transparent;
+    color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer;
+    border-radius: 8px; transition: all 0.2s;
+  }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+
+  .panel { display: none; padding: 0 16px 28px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+
+  canvas { display: block; margin: 0 auto; }
+
+  .controls {
+    display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center;
+  }
+  .controls button {
+    padding: 7px 16px; border: 1px solid #0f3460; background: #16213e;
+    color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer; border-radius: 6px;
+  }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+
+  .info-box {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7;
+  }
+
+  .legend { display: flex; justify-content: center; gap: 20px; margin-top: 10px; font-size: 0.78em; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-line { width: 20px; height: 3px; border-radius: 2px; }
+
+  .flow-pair { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+  .flow-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 12px;
+    padding: 16px; flex: 1; min-width: 300px; max-width: 440px;
+  }
+  .flow-card h3 { text-align: center; margin-bottom: 10px; font-size: 0.92em; }
+</style>
+</head>
+<body>
+
+<h1>SwiGLU 激活函数</h1>
+<p class="subtitle">SiLU + 门控线性单元 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">激活函数曲线</button>
+  <button class="tab-btn" onclick="switchTab(1)">门控机制</button>
+  <button class="tab-btn" onclick="switchTab(2)">FFN 结构对比</button>
+</div>
+
+<!-- ============== Panel 1: Activation Functions ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="actCanvas" width="900" height="440"></canvas>
+  <div class="legend" id="actLegend"></div>
+  <div class="controls">
+    <button class="on" id="btnReLU" onclick="toggleAct('relu')">ReLU</button>
+    <button class="on" id="btnSiLU" onclick="toggleAct('silu')">SiLU (Swish)</button>
+    <button class="on" id="btnGELU" onclick="toggleAct('gelu')">GELU</button>
+    <button id="btnSigmoid" onclick="toggleAct('sigmoid')">Sigmoid</button>
+    <button id="btnDeriv" onclick="toggleDeriv()">显示导数</button>
+  </div>
+  <div class="info-box" id="actInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Gating Mechanism ============== -->
+<div class="panel" id="panel-1">
+  <canvas id="gateCanvas" width="900" height="460"></canvas>
+  <div class="controls">
+    <button onclick="newGateData()">随机新数据</button>
+  </div>
+  <div class="info-box" id="gateInfo"></div>
+</div>
+
+<!-- ============== Panel 3: FFN Structure Comparison ============== -->
+<div class="panel" id="panel-2">
+  <div class="flow-pair">
+    <div class="flow-card">
+      <h3 style="color:#4fc3f7;">标准 FFN (GELU)</h3>
+      <canvas id="flowStd" width="400" height="400"></canvas>
+    </div>
+    <div class="flow-card">
+      <h3 style="color:#e94560;">SwiGLU FFN</h3>
+      <canvas id="flowSwi" width="400" height="400"></canvas>
+    </div>
+  </div>
+  <div class="controls" style="margin-top:14px;">
+    <button onclick="flowReset()">重置</button>
+    <button onclick="flowPrev()">上一步</button>
+    <button onclick="flowNext()">下一步</button>
+    <button id="flowAutoBtn" onclick="flowAuto()">自动播放</button>
+  </div>
+  <div class="info-box" id="flowInfo" style="text-align:center;">点击「下一步」开始</div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p, j) => p.classList.toggle('active', i === j));
+  tabBtns.forEach((b, j) => b.classList.toggle('active', i === j));
+  if (i === 0) drawAct();
+  if (i === 1) drawGate();
+  if (i === 2) { flowStep = -1; drawFlows(); }
+}
+
+function setupCanvas(id, w, h) {
+  const c = document.getElementById(id);
+  c.width = w * DPR; c.height = h * DPR;
+  c.style.width = w + 'px'; c.style.height = h + 'px';
+  const ctx = c.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+// ============================================================
+// Math helpers
+// ============================================================
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function relu(x) { return Math.max(0, x); }
+function silu(x) { return x * sigmoid(x); }
+function gelu(x) { return x * 0.5 * (1 + erf(x / Math.SQRT2)); }
+function erf(x) {
+  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+  const sign = x < 0 ? -1 : 1; x = Math.abs(x);
+  const t = 1 / (1 + p * x);
+  const y = 1 - ((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+  return sign * y;
+}
+// Derivatives
+function relu_d(x) { return x > 0 ? 1 : 0; }
+function silu_d(x) { const s = sigmoid(x); return s + x * s * (1 - s); }
+function gelu_d(x) {
+  const phi = 0.5 * (1 + erf(x / Math.SQRT2));
+  const pdf = Math.exp(-x*x/2) / Math.sqrt(2*Math.PI);
+  return phi + x * pdf;
+}
+function sigmoid_d(x) { const s = sigmoid(x); return s * (1 - s); }
+
+// ============================================================
+// Panel 1: Activation function curves
+// ============================================================
+let showActs = { relu: true, silu: true, gelu: true, sigmoid: false };
+let showDeriv = false;
+
+const ACT_DEFS = {
+  relu:    { fn: relu,    deriv: relu_d,    color: '#66bb6a', name: 'ReLU',    formula: 'max(0,x)' },
+  silu:    { fn: silu,    deriv: silu_d,    color: '#e94560', name: 'SiLU',    formula: 'x·σ(x)' },
+  gelu:    { fn: gelu,    deriv: gelu_d,    color: '#4fc3f7', name: 'GELU',    formula: 'x·Φ(x)' },
+  sigmoid: { fn: sigmoid, deriv: sigmoid_d, color: '#ffd54f', name: 'Sigmoid', formula: '1/(1+e⁻ˣ)' },
+};
+
+function toggleAct(name) {
+  showActs[name] = !showActs[name];
+  document.getElementById('btn' + name.charAt(0).toUpperCase() + name.slice(1)).classList.toggle('on');
+  drawAct();
+}
+function toggleDeriv() {
+  showDeriv = !showDeriv;
+  document.getElementById('btnDeriv').classList.toggle('on');
+  drawAct();
+}
+
+function drawAct() {
+  const W = 900, H = 440;
+  const ctx = setupCanvas('actCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const xMin = -5, xMax = 5, yMin = -2, yMax = 4;
+  const left = 50, right = W - 20, top = 20, bottom = H - 30;
+
+  function toSx(x) { return left + (x - xMin) / (xMax - xMin) * (right - left); }
+  function toSy(y) { return bottom - (y - yMin) / (yMax - yMin) * (bottom - top); }
+
+  // Grid
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 0.5;
+  for (let x = Math.ceil(xMin); x <= xMax; x++) {
+    const sx = toSx(x);
+    ctx.beginPath(); ctx.moveTo(sx, top); ctx.lineTo(sx, bottom); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(x, sx, bottom + 14);
+  }
+  for (let y = Math.ceil(yMin); y <= yMax; y++) {
+    const sy = toSy(y);
+    ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y, left - 8, sy + 4);
+  }
+
+  // Axes
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(toSx(0), top); ctx.lineTo(toSx(0), bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(left, toSy(0)); ctx.lineTo(right, toSy(0)); ctx.stroke();
+
+  // Draw curves
+  const step = 0.02;
+  for (const [name, def] of Object.entries(ACT_DEFS)) {
+    if (!showActs[name]) continue;
+
+    // Main function
+    ctx.strokeStyle = def.color;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    let first = true;
+    for (let x = xMin; x <= xMax; x += step) {
+      const y = def.fn(x);
+      const sx = toSx(x), sy = toSy(y);
+      if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+
+    // Derivative (dashed)
+    if (showDeriv) {
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      first = true;
+      for (let x = xMin; x <= xMax; x += step) {
+        const y = def.deriv(x);
+        const sx = toSx(x), sy = toSy(y);
+        if (first) { ctx.moveTo(sx, sy); first = false; } else ctx.lineTo(sx, sy);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Highlight SiLU negative dip
+  if (showActs.silu) {
+    const dipX = -1.28;
+    const dipY = silu(dipX);
+    const sx = toSx(dipX), sy = toSy(dipY);
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#e9456066'; ctx.fill();
+    ctx.strokeStyle = '#e94560'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#e94560'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(`(${dipX}, ${dipY.toFixed(3)})`, sx + 8, sy - 6);
+  }
+
+  // Legend
+  const legendEl = document.getElementById('actLegend');
+  legendEl.innerHTML = '';
+  for (const [name, def] of Object.entries(ACT_DEFS)) {
+    if (!showActs[name]) continue;
+    legendEl.innerHTML += `<div class="legend-item"><div class="legend-line" style="background:${def.color}"></div>${def.name}: ${def.formula}</div>`;
+  }
+  if (showDeriv) {
+    legendEl.innerHTML += `<div class="legend-item"><div class="legend-line" style="background:#888; border-top:2px dashed #aaa;height:0"></div>导数 (虚线)</div>`;
+  }
+
+  // Info
+  let info = '<b>关键对比 (x=-1):</b> ';
+  info += `ReLU(-1)=<span style="color:#66bb6a">0</span> (完全死亡), `;
+  info += `SiLU(-1)=<span style="color:#e94560">${silu(-1).toFixed(4)}</span> (微小负值), `;
+  info += `GELU(-1)=<span style="color:#4fc3f7">${gelu(-1).toFixed(4)}</span>`;
+  info += '<br><b>SiLU 特点:</b> 非单调，在 x≈-1.28 有最小值 ≈-0.278。负区间有微弱梯度，不会"杀死"神经元。';
+  document.getElementById('actInfo').innerHTML = info;
+}
+
+// ============================================================
+// Panel 2: Gating mechanism
+// ============================================================
+let gateData;
+
+function newGateData() {
+  const D = 12;
+  gateData = {
+    gate_raw: Array.from({length: D}, () => (Math.random() - 0.5) * 4),
+    up_raw: Array.from({length: D}, () => (Math.random() - 0.5) * 3),
+  };
+  drawGate();
+}
+
+function drawGate() {
+  if (!gateData) newGateData();
+
+  const W = 900, H = 460;
+  const ctx = setupCanvas('gateCanvas', W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const D = gateData.gate_raw.length;
+  const gate_act = gateData.gate_raw.map(silu);
+  const output = gate_act.map((g, i) => g * gateData.up_raw[i]);
+
+  const rows = [
+    { label: 'W_gate · x', data: gateData.gate_raw, color: '#e94560' },
+    { label: 'SiLU(gate)', data: gate_act, color: '#ff6b8a' },
+    { label: 'W_up · x', data: gateData.up_raw, color: '#4fc3f7' },
+    { label: 'gate ⊙ up', data: output, color: '#ffd54f' },
+  ];
+
+  const left = 100, right = W - 30, top = 30, rowH = 100, gap = 8;
+  const barW = (right - left) / D;
+
+  // Find global range
+  const all = rows.flatMap(r => r.data);
+  const absMax = Math.max(...all.map(Math.abs), 0.5);
+
+  rows.forEach((row, ri) => {
+    const baseY = top + ri * (rowH + gap);
+    const midY = baseY + rowH / 2;
+
+    // Label
+    ctx.fillStyle = row.color;
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(row.label, left - 10, midY + 4);
+
+    // Zero line
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(left, midY); ctx.lineTo(right, midY); ctx.stroke();
+
+    // Bars
+    row.data.forEach((v, i) => {
+      const x = left + i * barW + 2;
+      const bw = barW - 4;
+      const barH = (v / absMax) * (rowH / 2 - 4);
+
+      ctx.fillStyle = row.color;
+      ctx.globalAlpha = 0.75;
+      if (v >= 0) {
+        ctx.fillRect(x, midY - barH, bw, barH);
+      } else {
+        ctx.fillRect(x, midY, bw, -barH);
+      }
+      ctx.globalAlpha = 1;
+
+      // Value
+      ctx.fillStyle = '#aaa';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      const ty = v >= 0 ? midY - barH - 4 : midY - barH + 10;
+      ctx.fillText(v.toFixed(2), x + bw / 2, ty);
+    });
+
+    // Operator label between rows
+    if (ri === 1) {
+      ctx.fillStyle = '#888'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('⊙', left / 2, baseY + rowH + gap / 2 + 4);
+    }
+    if (ri === 0) {
+      ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('SiLU ↓', left / 2, baseY + rowH + gap / 2 + 4);
+    }
+  });
+
+  // Draw arrows showing gating effect
+  const arrowY = top + 3 * (rowH + gap) + rowH + 10;
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+
+  // Find most "gated" dimension (gate near 0)
+  let minGateIdx = 0, maxGateIdx = 0;
+  gate_act.forEach((g, i) => {
+    if (Math.abs(g) < Math.abs(gate_act[minGateIdx])) minGateIdx = i;
+    if (Math.abs(g) > Math.abs(gate_act[maxGateIdx])) maxGateIdx = i;
+  });
+
+  // Info
+  const closedGate = gateData.gate_raw[minGateIdx];
+  const closedSilu = gate_act[minGateIdx];
+  const closedUp = gateData.up_raw[minGateIdx];
+  const closedOut = output[minGateIdx];
+  const openGate = gateData.gate_raw[maxGateIdx];
+  const openSilu = gate_act[maxGateIdx];
+  const openUp = gateData.up_raw[maxGateIdx];
+  const openOut = output[maxGateIdx];
+
+  document.getElementById('gateInfo').innerHTML =
+    `<b>门控效果:</b><br>` +
+    `维度 ${minGateIdx} (门关): gate_raw=${closedGate.toFixed(2)} → SiLU=${closedSilu.toFixed(3)}, up=${closedUp.toFixed(2)} → <span style="color:#ffd54f">输出=${closedOut.toFixed(3)}</span> (被抑制)<br>` +
+    `维度 ${maxGateIdx} (门开): gate_raw=${openGate.toFixed(2)} → SiLU=${openSilu.toFixed(3)}, up=${openUp.toFixed(2)} → <span style="color:#ffd54f">输出=${openOut.toFixed(3)}</span> (被放大)<br>` +
+    `→ 门控让网络<b>选择性地</b>通过某些维度的信息，屏蔽其他维度`;
+}
+
+// ============================================================
+// Panel 3: FFN structure comparison
+// ============================================================
+let flowStep = -1, flowTimer = null;
+
+const STD_STEPS = [
+  { label: 'x (B, S, D)', note: '输入' },
+  { label: 'W₁ · x', note: 'up-project: D→4D' },
+  { label: 'GELU(·)', note: '激活函数' },
+  { label: 'W₂ · (·)', note: 'down-project: 4D→D' },
+  { label: 'output', note: '输出' },
+];
+const SWI_STEPS = [
+  { label: 'x (B, S, D)', note: '输入' },
+  { label: 'W_gate · x  |  W_up · x', note: '双路投影: D→d_ff' },
+  { label: 'SiLU(gate)', note: '门控激活' },
+  { label: 'gate ⊙ up', note: '门控相乘' },
+  { label: 'W_down · (·)', note: 'down-project: d_ff→D' },
+  { label: 'output', note: '输出' },
+];
+
+function drawFlows() {
+  drawOneFlow('flowStd', STD_STEPS, '#4fc3f7');
+  drawOneFlow('flowSwi', SWI_STEPS, '#e94560');
+  const maxS = Math.max(STD_STEPS.length, SWI_STEPS.length);
+  document.getElementById('flowInfo').textContent =
+    flowStep >= 0 ? `Step ${flowStep + 1} / ${maxS}` : '点击「下一步」开始';
+}
+
+function drawOneFlow(canvasId, steps, accent) {
+  const W = 400, H = 400;
+  const ctx = setupCanvas(canvasId, W, H);
+  ctx.clearRect(0, 0, W, H);
+
+  const bw = 280, bh = 34;
+  const cx = W / 2;
+  const totalH = steps.length * (bh + 20) - 20;
+  const startY = (H - totalH) / 2;
+
+  steps.forEach((s, i) => {
+    const y = startY + i * (bh + 20);
+    const active = i <= flowStep;
+    const current = i === flowStep;
+
+    // connector
+    if (i > 0) {
+      ctx.strokeStyle = active ? accent : '#333'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(cx, y - 20); ctx.lineTo(cx, y); ctx.stroke();
+      if (active) {
+        ctx.fillStyle = accent;
+        ctx.beginPath(); ctx.moveTo(cx-4, y-3); ctx.lineTo(cx+4, y-3); ctx.lineTo(cx, y+2);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+
+    // Special: SwiGLU step 1 has two branches
+    if (canvasId === 'flowSwi' && i === 1 && active) {
+      // Draw split indicator
+      ctx.strokeStyle = accent; ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      const splitW = bw * 0.42;
+      ctx.strokeRect(cx - bw/2, y, splitW, bh);
+      ctx.strokeRect(cx - bw/2 + splitW + 4, y, splitW, bh);
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = '#fff'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('gate', cx - bw/2 + splitW/2, y + bh/2 + 4);
+      ctx.fillText('up', cx - bw/2 + splitW + 4 + splitW/2, y + bh/2 + 4);
+    }
+
+    // box
+    const bx = cx - bw / 2;
+    ctx.fillStyle = current ? accent : (active ? '#0f3460' : '#16213e');
+    ctx.strokeStyle = current ? accent : (active ? accent : '#333');
+    ctx.lineWidth = current ? 2.5 : 1.5;
+    ctx.beginPath(); ctx.roundRect(bx, y, bw, bh, 6); ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = active ? '#fff' : '#555';
+    ctx.font = `${current ? 'bold ' : ''}11px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.label, cx, y + bh / 2);
+
+    // note
+    if (active) {
+      ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+      ctx.fillText(s.note, cx + bw/2 + 6, y + bh/2 + 3);
+    }
+  });
+}
+
+function flowNext() {
+  const max = Math.max(STD_STEPS.length, SWI_STEPS.length);
+  if (flowStep < max - 1) { flowStep++; drawFlows(); }
+}
+function flowPrev() { if (flowStep >= 0) { flowStep--; drawFlows(); } }
+function flowReset() {
+  flowStep = -1;
+  if (flowTimer) { clearInterval(flowTimer); flowTimer = null; }
+  document.getElementById('flowAutoBtn').classList.remove('on');
+  drawFlows();
+}
+function flowAuto() {
+  const btn = document.getElementById('flowAutoBtn');
+  if (flowTimer) { clearInterval(flowTimer); flowTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  flowStep = -1;
+  const max = Math.max(STD_STEPS.length, SWI_STEPS.length);
+  flowTimer = setInterval(() => {
+    flowStep++;
+    if (flowStep >= max) { clearInterval(flowTimer); flowTimer = null; btn.classList.remove('on'); }
+    drawFlows();
+  }, 900);
+}
+
+// ============================================================
+// Mouse hover for Panel 1
+// ============================================================
+const actCanvasEl = document.getElementById('actCanvas');
+actCanvasEl.addEventListener('mousemove', (e) => {
+  const rect = actCanvasEl.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const W = 900, left = 50, right = W - 20;
+  const xMin = -5, xMax = 5;
+  const x = xMin + (mx - left) / (right - left) * (xMax - xMin);
+  if (x < xMin || x > xMax) return;
+
+  drawAct();
+  const ctx = actCanvasEl.getContext('2d');
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  // Vertical line
+  const sx = left + (x - xMin) / (xMax - xMin) * (right - left);
+  ctx.strokeStyle = '#ffffff33'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(sx, 20); ctx.lineTo(sx, 440 - 30); ctx.stroke();
+
+  // Values
+  let yOff = 40;
+  ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText(`x = ${x.toFixed(2)}`, sx + 8, yOff); yOff += 16;
+  for (const [name, def] of Object.entries(ACT_DEFS)) {
+    if (!showActs[name]) continue;
+    ctx.fillStyle = def.color;
+    const v = def.fn(x);
+    ctx.fillText(`${def.name} = ${v.toFixed(4)}`, sx + 8, yOff); yOff += 14;
+  }
+});
+
+// ============================================================
+// Init
+// ============================================================
+drawAct();
+</script>
+</body>
+</html>

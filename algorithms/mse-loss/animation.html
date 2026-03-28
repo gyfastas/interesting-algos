@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MSE Loss — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'SF Mono','Fira Code','Consolas',monospace; min-height: 100vh; }
+  h1 { text-align: center; padding: 20px 0 4px; font-size: 1.5em; color: #e94560; }
+  .subtitle { text-align: center; color: #888; font-size: 0.8em; margin-bottom: 16px; }
+  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; }
+  .tab-btn { padding: 8px 22px; border: 2px solid #0f3460; background: transparent; color: #e0e0e0; font-family: inherit; font-size: 0.88em; cursor: pointer; border-radius: 8px; transition: all 0.2s; }
+  .tab-btn:hover { background: #0f3460; }
+  .tab-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
+  .panel { display: none; padding: 0 16px 28px; max-width: 960px; margin: 0 auto; }
+  .panel.active { display: block; }
+  canvas { display: block; margin: 0 auto; }
+  .controls { display: flex; justify-content: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .controls button { padding: 7px 16px; border: 1px solid #0f3460; background: #16213e; color: #e0e0e0; font-family: inherit; font-size: 0.82em; cursor: pointer; border-radius: 6px; }
+  .controls button:hover { background: #0f3460; }
+  .controls button.on { background: #e94560; border-color: #e94560; }
+  .controls input[type=text] { padding: 6px 10px; border: 1px solid #0f3460; background: #16213e; color: #e0e0e0; font-family: inherit; font-size: 0.85em; border-radius: 6px; }
+  .controls label { font-size: 0.8em; color: #888; }
+  .info-box { background: #16213e; border: 1px solid #0f3460; border-radius: 10px; padding: 14px 18px; margin-top: 14px; font-size: 0.8em; line-height: 1.7; }
+  .c-red { color: #e94560; font-weight: bold; }
+  .c-blue { color: #4fc3f7; font-weight: bold; }
+  .c-green { color: #66bb6a; font-weight: bold; }
+  .c-yellow { color: #ffd54f; font-weight: bold; }
+  .slider-row { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 10px; }
+  .slider-row label { font-size: 0.82em; color: #888; }
+  .slider-row input[type=range] { width: 200px; accent-color: #e94560; }
+  .slider-row .val { color: #e94560; font-weight: bold; min-width: 50px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>MSE Loss</h1>
+<p class="subtitle">均方误差损失函数 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">损失曲线对比</button>
+  <button class="tab-btn" onclick="switchTab(1)">交互计算器</button>
+  <button class="tab-btn" onclick="switchTab(2)">异常值影响</button>
+</div>
+
+<!-- ============== Panel 1: Loss curves ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="curveCanvas" width="900" height="420"></canvas>
+  <div class="controls">
+    <button class="on" id="btnMSE" onclick="toggle('mse')">MSE</button>
+    <button class="on" id="btnMAE" onclick="toggle('mae')">MAE</button>
+    <button id="btnHuber" onclick="toggle('huber')">Huber (δ=1)</button>
+    <button id="btnGrad" onclick="toggleGrad()">显示梯度</button>
+  </div>
+  <div class="info-box" id="curveInfo">鼠标悬停查看数值。<b>MSE</b> 在误差大时 loss 飙升（平方），<b>MAE</b> 线性增长，<b>Huber</b> 取长补短。</div>
+</div>
+
+<!-- ============== Panel 2: Calculator ============== -->
+<div class="panel" id="panel-1">
+  <div class="controls" style="margin-bottom:14px;">
+    <label>y_true:</label>
+    <input type="text" id="calcTrue" value="3.0, -0.5, 2.0, 7.0" style="width:220px;">
+    <label>y_pred:</label>
+    <input type="text" id="calcPred" value="2.5, 0.0, 2.0, 8.0" style="width:220px;">
+    <button onclick="drawCalc()">计算</button>
+  </div>
+  <canvas id="calcCanvas" width="900" height="380"></canvas>
+  <div class="info-box" id="calcInfo"></div>
+</div>
+
+<!-- ============== Panel 3: Outlier impact ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="outlierCanvas" width="900" height="400"></canvas>
+  <div class="slider-row">
+    <label>异常值大小:</label>
+    <input type="range" id="outlierSlider" min="5" max="200" step="1" value="50" oninput="drawOutlier()">
+    <span class="val" id="outlierVal">50</span>
+  </div>
+  <div class="info-box" id="outlierInfo"></div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j)=>p.classList.toggle('active',i===j));
+  tabBtns.forEach((b,j)=>b.classList.toggle('active',i===j));
+  if(i===0) drawCurve();
+  if(i===1) drawCalc();
+  if(i===2) drawOutlier();
+}
+function setupCanvas(id,w,h) {
+  const c=document.getElementById(id); c.width=w*DPR; c.height=h*DPR;
+  c.style.width=w+'px'; c.style.height=h+'px';
+  const ctx=c.getContext('2d'); ctx.scale(DPR,DPR); return ctx;
+}
+
+// ============================================================
+// Panel 1: Loss curves
+// ============================================================
+let showCurves = {mse:true, mae:true, huber:false};
+let showGrad = false;
+function toggle(k){showCurves[k]=!showCurves[k]; document.getElementById('btn'+k.toUpperCase()).classList.toggle('on'); drawCurve();}
+function toggleGrad(){showGrad=!showGrad; document.getElementById('btnGrad').classList.toggle('on'); drawCurve();}
+
+const CURVES = {
+  mse:  {fn:e=>e*e,       grad:e=>2*e,             color:'#e94560', name:'MSE: e²'},
+  mae:  {fn:e=>Math.abs(e), grad:e=>e>0?1:e<0?-1:0, color:'#4fc3f7', name:'MAE: |e|'},
+  huber:{fn:e=>{const d=1;return Math.abs(e)<=d?0.5*e*e:d*(Math.abs(e)-0.5*d);},
+         grad:e=>{const d=1;return Math.abs(e)<=d?e:d*Math.sign(e);},
+         color:'#ffd54f', name:'Huber (δ=1)'},
+};
+
+function drawCurve() {
+  const W=900,H=420,left=60,right=W-30,top=30,bottom=H-40;
+  const ctx=setupCanvas('curveCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+  const eMin=-5,eMax=5,yMin=-1,yMax=showGrad?6:26;
+  function toSx(e){return left+(e-eMin)/(eMax-eMin)*(right-left);}
+  function toSy(y){return bottom-(y-yMin)/(yMax-yMin)*(bottom-top);}
+
+  // Grid
+  ctx.strokeStyle='#222'; ctx.lineWidth=0.5;
+  for(let e=-4;e<=4;e+=2){const sx=toSx(e); ctx.beginPath(); ctx.moveTo(sx,top); ctx.lineTo(sx,bottom); ctx.stroke(); ctx.fillStyle='#555'; ctx.font='10px monospace'; ctx.textAlign='center'; ctx.fillText(e,sx,bottom+14);}
+  for(let y=0;y<=yMax;y+=showGrad?2:5){const sy=toSy(y); ctx.beginPath(); ctx.moveTo(left,sy); ctx.lineTo(right,sy); ctx.stroke(); ctx.fillStyle='#555'; ctx.font='10px monospace'; ctx.textAlign='right'; ctx.fillText(y,left-8,sy+4);}
+  // Axes
+  ctx.strokeStyle='#555'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(toSx(0),top); ctx.lineTo(toSx(0),bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(left,toSy(0)); ctx.lineTo(right,toSy(0)); ctx.stroke();
+  ctx.fillStyle='#888'; ctx.font='12px monospace'; ctx.textAlign='center';
+  ctx.fillText('error (y_true - y_pred)',(left+right)/2,bottom+30);
+
+  const step=0.02;
+  for(const [k,c] of Object.entries(CURVES)){
+    if(!showCurves[k]) continue;
+    const fn = showGrad ? c.grad : c.fn;
+    ctx.strokeStyle=c.color; ctx.lineWidth=2.5; ctx.globalAlpha=0.9;
+    if(showGrad){ctx.setLineDash([5,4]); ctx.lineWidth=2;}
+    ctx.beginPath(); let first=true;
+    for(let e=eMin;e<=eMax;e+=step){
+      const y=fn(e); const sx=toSx(e),sy=toSy(y);
+      if(sy<top-10||sy>bottom+10){first=true;continue;}
+      if(first){ctx.moveTo(sx,sy);first=false;} else ctx.lineTo(sx,sy);
+    }
+    ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha=1;
+  }
+
+  // Legend
+  let lx=right-180,ly=top+10;
+  for(const [k,c] of Object.entries(CURVES)){
+    if(!showCurves[k]) continue;
+    ctx.strokeStyle=c.color; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(lx+20,ly); ctx.stroke();
+    ctx.fillStyle=c.color; ctx.font='10px monospace'; ctx.textAlign='left';
+    ctx.fillText(c.name+(showGrad?' (grad)':''),lx+25,ly+4); ly+=18;
+  }
+}
+
+// Mouse hover
+document.getElementById('curveCanvas').addEventListener('mousemove',(ev)=>{
+  const rect=ev.target.getBoundingClientRect();
+  const mx=ev.clientX-rect.left, left=60, right=900-30;
+  const e=-5+(mx-left)/(right-left)*10;
+  if(e<-5||e>5)return;
+  let info=`<b>error = ${e.toFixed(2)}</b>: `;
+  for(const [k,c] of Object.entries(CURVES)){
+    if(!showCurves[k]) continue;
+    const v = showGrad ? c.grad(e) : c.fn(e);
+    info+=`<span style="color:${c.color}">${k.toUpperCase()}=${v.toFixed(3)}</span>  `;
+  }
+  document.getElementById('curveInfo').innerHTML=info;
+});
+
+// ============================================================
+// Panel 2: Calculator
+// ============================================================
+function drawCalc(){
+  const yt=document.getElementById('calcTrue').value.split(',').map(s=>parseFloat(s.trim())).filter(v=>!isNaN(v));
+  const yp=document.getElementById('calcPred').value.split(',').map(s=>parseFloat(s.trim())).filter(v=>!isNaN(v));
+  const n=Math.min(yt.length,yp.length); if(n<1)return;
+
+  const W=900,H=380;
+  const ctx=setupCanvas('calcCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const diff=[], sq=[], grads=[];
+  for(let i=0;i<n;i++){
+    diff.push(yt[i]-yp[i]);
+    sq.push(diff[i]**2);
+    grads.push(2*(yp[i]-yt[i])/n);
+  }
+  const mse=sq.reduce((a,b)=>a+b,0)/n;
+
+  // Layout: bars for each step
+  const left=80,right=W-20,top=40,bottom=H-40;
+  const barW=Math.min(70,(right-left)/n-10);
+  const gap=(right-left)/n;
+
+  const rows=[
+    {label:'y_true',     data:yt,   color:'#888'},
+    {label:'y_pred',     data:yp,   color:'#4fc3f7'},
+    {label:'diff',       data:diff, color:'#ffd54f'},
+    {label:'diff²',      data:sq,   color:'#e94560'},
+    {label:'grad ∂/∂ŷ',  data:grads,color:'#66bb6a'},
+  ];
+  const rowH=(bottom-top)/rows.length;
+
+  rows.forEach((row,ri)=>{
+    const baseY=top+ri*rowH;
+    const midY=baseY+rowH/2;
+    const absMax=Math.max(...row.data.map(Math.abs),0.01);
+
+    ctx.fillStyle=row.color; ctx.font='bold 10px monospace'; ctx.textAlign='right';
+    ctx.fillText(row.label,left-8,midY+4);
+
+    ctx.strokeStyle='#333'; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(left,midY); ctx.lineTo(right,midY); ctx.stroke();
+
+    row.data.forEach((v,i)=>{
+      const cx=left+i*gap+gap/2;
+      const bh=(v/absMax)*(rowH/2-8);
+      ctx.fillStyle=row.color; ctx.globalAlpha=0.7;
+      if(v>=0) ctx.fillRect(cx-barW/2,midY-bh,barW,bh);
+      else ctx.fillRect(cx-barW/2,midY,barW,-bh);
+      ctx.globalAlpha=1;
+      ctx.fillStyle='#ccc'; ctx.font='9px monospace'; ctx.textAlign='center';
+      const ty=v>=0?midY-bh-5:midY-bh+10;
+      ctx.fillText(Math.abs(v)<100?v.toFixed(2):v.toFixed(0),cx,ty);
+    });
+  });
+
+  document.getElementById('calcInfo').innerHTML=
+    `<span class="c-red">MSE = mean(${sq.map(s=>s.toFixed(2)).join(' + ')}) / ${n} = ${mse.toFixed(4)}</span><br>`+
+    `RMSE = √MSE = ${Math.sqrt(mse).toFixed(4)}<br>`+
+    `梯度 ∂MSE/∂ŷ_i = 2(ŷ_i - y_i)/${n} = [${grads.map(g=>g.toFixed(4)).join(', ')}]`;
+}
+
+// ============================================================
+// Panel 3: Outlier impact
+// ============================================================
+function drawOutlier(){
+  const outlierV=+document.getElementById('outlierSlider').value;
+  document.getElementById('outlierVal').textContent=outlierV;
+
+  const W=900,H=400;
+  const ctx=setupCanvas('outlierCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const yt=[1,2,3,4,outlierV];
+  const yp=[1.1,2.1,3.1,4.1,5.0];
+  const n=yt.length;
+
+  const sq=yt.map((t,i)=>(t-yp[i])**2);
+  const mse=sq.reduce((a,b)=>a+b,0)/n;
+  const mae=yt.map((t,i)=>Math.abs(t-yp[i])).reduce((a,b)=>a+b,0)/n;
+  const delta=1;
+  const huber=yt.map((t,i)=>{const e=Math.abs(t-yp[i]);return e<=delta?0.5*e*e:delta*(e-0.5*delta);}).reduce((a,b)=>a+b,0)/n;
+
+  // Stacked bar showing each sample's contribution
+  const left=80,right=W-40,top=40,bottom=H-80;
+  const methods=[
+    {name:'MSE', vals:sq.map(s=>s/n), total:mse, color:'#e94560'},
+    {name:'MAE', vals:yt.map((t,i)=>Math.abs(t-yp[i])/n), total:mae, color:'#4fc3f7'},
+    {name:'Huber', vals:yt.map((t,i)=>{const e=Math.abs(t-yp[i]);return (e<=delta?0.5*e*e:delta*(e-0.5*delta))/n;}), total:huber, color:'#ffd54f'},
+  ];
+  const maxTotal=Math.max(...methods.map(m=>m.total),1);
+  const barH=50, gap=30;
+  const totalH=methods.length*(barH+gap)-gap;
+  const startY=top+(bottom-top-totalH)/2;
+
+  methods.forEach((m,mi)=>{
+    const y=startY+mi*(barH+gap);
+    ctx.fillStyle=m.color; ctx.font='bold 12px monospace'; ctx.textAlign='right';
+    ctx.fillText(m.name,left-10,y+barH/2+4);
+
+    const fullW=right-left;
+    let cx=left;
+    m.vals.forEach((v,i)=>{
+      const w=Math.max(1,(v/maxTotal)*fullW);
+      const isOutlier=i===n-1;
+      ctx.fillStyle=m.color; ctx.globalAlpha=isOutlier?0.9:0.4;
+      ctx.fillRect(cx,y,w,barH);
+      ctx.globalAlpha=1;
+      if(w>25){
+        ctx.fillStyle='#fff'; ctx.font='9px monospace'; ctx.textAlign='center';
+        ctx.fillText(isOutlier?`异常:${(v*n).toFixed(1)}`:`${(v*n).toFixed(2)}`,cx+w/2,y+barH/2+3);
+      }
+      cx+=w+1;
+    });
+
+    ctx.fillStyle='#ccc'; ctx.font='11px monospace'; ctx.textAlign='left';
+    ctx.fillText(`= ${m.total.toFixed(2)}`,cx+8,y+barH/2+4);
+  });
+
+  // Data labels
+  ctx.fillStyle='#888'; ctx.font='11px monospace'; ctx.textAlign='center';
+  ctx.fillText(`y_true = [1, 2, 3, 4, ${outlierV}]   y_pred = [1.1, 2.1, 3.1, 4.1, 5.0]`,W/2,bottom+20);
+  ctx.fillText(`异常值误差: |${outlierV} - 5| = ${Math.abs(outlierV-5)}`,W/2,bottom+38);
+
+  // Contribution percentage
+  const outlierPct=(sq[4]/n)/mse*100;
+  document.getElementById('outlierInfo').innerHTML=
+    `<b>异常值 = ${outlierV}</b> (误差 = ${Math.abs(outlierV-5)}):<br>`+
+    `<span class="c-red">MSE = ${mse.toFixed(2)}</span> — 异常值贡献 <span class="c-red">${outlierPct.toFixed(1)}%</span> 的 loss (${sq[4].toFixed(1)} / ${(mse*n).toFixed(1)})<br>`+
+    `<span class="c-blue">MAE = ${mae.toFixed(2)}</span> — 异常值影响是线性的<br>`+
+    `<span class="c-yellow">Huber = ${huber.toFixed(2)}</span> — 大误差被截断到线性增长<br>`+
+    `→ 异常值越大，MSE 和 MAE/Huber 的差距越悬殊`;
+}
+
+// Init
+drawCurve();
+</script>
+</body>
+</html>
