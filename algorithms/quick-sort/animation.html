@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快速排序 — 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:1060px;margin:0 auto}
+  .panel.active{display:block}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls select{padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  .main-area{display:flex;gap:14px;align-items:flex-start}
+  .bar-area{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:16px;min-height:320px;position:relative;flex:1}
+  .code-panel{min-width:280px;max-width:360px}
+  .code-block{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;font-size:.72em;line-height:1.7;overflow-x:auto;white-space:pre;max-height:420px;overflow-y:auto}
+  .code-block .hl{background:#e9456033;display:inline;border-radius:2px}
+  .code-block .comment{color:#555}
+  .code-block .kw{color:#ab47bc}
+  .code-block .fn{color:#4fc3f7}
+  .code-block .num{color:#ffd54f}
+  .code-title{font-size:.8em;color:#888;margin-bottom:6px}
+
+  .arr-bar{display:inline-flex;flex-direction:column;align-items:center;margin:0 1px;transition:all .3s}
+  .arr-bar .bar{border-radius:3px 3px 0 0;transition:all .3s}
+  .arr-bar .val{font-size:.7em;margin-top:2px;color:#aaa}
+  .arr-bar .idx{font-size:.6em;color:#555}
+
+  .legend{display:flex;gap:14px;margin-top:8px;font-size:.72em;flex-wrap:wrap;justify-content:center}
+  .legend-item{display:flex;align-items:center;gap:4px}
+  .legend-dot{width:12px;height:12px;border-radius:2px}
+
+  .call-stack{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:10px;margin-top:10px;font-size:.72em;max-height:160px;overflow-y:auto}
+  .stack-item{padding:3px 8px;margin:2px 0;border-radius:4px;border-left:3px solid #0f3460}
+  .stack-item.active{background:#e9456022;border-left-color:#e94560}
+</style>
+</head>
+<body>
+
+<h1>快速排序</h1>
+<p class="subtitle">Partition 过程逐步可视化 — 递归 vs 非递归</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">Partition 过程</button>
+  <button class="tab-btn" onclick="switchTab(1)">递归 vs 非递归</button>
+  <button class="tab-btn" onclick="switchTab(2)">三路快排</button>
+</div>
+
+<!-- ============== Panel 1: Partition ============== -->
+<div class="panel active" id="panel-0">
+  <div class="main-area">
+    <div style="flex:1">
+      <div class="bar-area" id="partArea"></div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> pivot</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#66bb6a"></div> < pivot</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#4fc3f7"></div> 当前比较</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ffd54f"></div> >= pivot</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#555"></div> 未扫描</div>
+      </div>
+      <div class="controls">
+        <label>数据:</label>
+        <select id="partData" onchange="resetPart()">
+          <option value="random">随机 [3,7,8,5,2,1,9,5,4]</option>
+          <option value="sorted">已排序 [1,2,3,4,5,6,7,8]</option>
+          <option value="reverse">逆序 [8,7,6,5,4,3,2,1]</option>
+          <option value="dupes">大量重复 [3,1,4,1,5,9,2,6,5,3]</option>
+        </select>
+        <label>Partition:</label>
+        <select id="partType" onchange="resetPart()">
+          <option value="lomuto">Lomuto</option>
+          <option value="hoare">Hoare</option>
+        </select>
+        <button onclick="resetPart()">重置</button>
+        <button onclick="stepPart()">下一步</button>
+        <button id="partAutoBtn" onclick="autoPart()">自动</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title" id="partCodeTitle">solution.py — Lomuto Partition</div>
+      <div class="code-block" id="partCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="partInfo">点击「重置」选择数据，然后逐步执行 partition。</div>
+</div>
+
+<!-- ============== Panel 2: Recursive vs Iterative ============== -->
+<div class="panel" id="panel-1">
+  <div class="main-area">
+    <div style="flex:1">
+      <div class="bar-area" id="sortArea"></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <div style="flex:1">
+          <div style="font-size:.75em;color:#888;margin-bottom:4px">递归调用栈:</div>
+          <div class="call-stack" id="recStack"></div>
+        </div>
+        <div style="flex:1">
+          <div style="font-size:.75em;color:#888;margin-bottom:4px">显式栈 (非递归):</div>
+          <div class="call-stack" id="iterStack"></div>
+        </div>
+      </div>
+      <div class="controls">
+        <select id="sortData" onchange="resetSort()">
+          <option value="random">随机</option>
+          <option value="sorted">已排序</option>
+          <option value="reverse">逆序</option>
+        </select>
+        <button onclick="resetSort()">重置</button>
+        <button onclick="stepSort()">下一步</button>
+        <button id="sortAutoBtn" onclick="autoSort()">自动</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">递归 vs 非递归 代码对比</div>
+      <div class="code-block" id="sortCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="sortInfo">左边递归调用栈，右边显式栈 — 本质相同，形式不同。</div>
+</div>
+
+<!-- ============== Panel 3: 3-way ============== -->
+<div class="panel" id="panel-2">
+  <div class="main-area">
+    <div style="flex:1">
+      <div class="bar-area" id="threeArea"></div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#66bb6a"></div> < pivot</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#e94560"></div> == pivot</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#555"></div> 未扫描</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ffd54f"></div> > pivot</div>
+      </div>
+      <div class="controls">
+        <button onclick="resetThree()">重置</button>
+        <button onclick="stepThree()">下一步</button>
+        <button id="threeAutoBtn" onclick="autoThree()">自动</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">solution.py — 三路快排 (Dutch National Flag)</div>
+      <div class="code-block" id="threeCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="threeInfo">三路快排: 等于 pivot 的元素聚在中间，不再递归。适合大量重复元素。</div>
+</div>
+
+<script>
+// ============================================================
+// Globals
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+}
+
+const DATASETS = {
+  random: [3,7,8,5,2,1,9,5,4],
+  sorted: [1,2,3,4,5,6,7,8],
+  reverse: [8,7,6,5,4,3,2,1],
+  dupes: [3,1,4,1,5,9,2,6,5,3],
+};
+
+function renderBars(containerId, arr, highlights = {}, pointers = {}) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  const maxVal = Math.max(...arr, 1);
+  const barW = Math.min(40, Math.floor((el.clientWidth - 20) / arr.length) - 2);
+  const maxH = 240;
+
+  // Pointer labels on top
+  const ptrRow = document.createElement('div');
+  ptrRow.style.cssText = 'display:flex;justify-content:flex-start;margin-bottom:4px;height:20px';
+  arr.forEach((_, idx) => {
+    const cell = document.createElement('div');
+    cell.style.cssText = `width:${barW+2}px;text-align:center;font-size:.65em;color:#e94560;font-weight:bold`;
+    const labels = [];
+    for (const [name, pidx] of Object.entries(pointers)) {
+      if (pidx === idx) labels.push(name);
+    }
+    cell.textContent = labels.join(',');
+    ptrRow.appendChild(cell);
+  });
+  el.appendChild(ptrRow);
+
+  // Bars
+  const barRow = document.createElement('div');
+  barRow.style.cssText = 'display:flex;align-items:flex-end;justify-content:flex-start;height:' + maxH + 'px';
+
+  arr.forEach((v, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'arr-bar';
+
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const h = Math.max(8, (v / maxVal) * (maxH - 30));
+    const color = highlights[idx] || '#0f3460';
+    bar.style.cssText = `width:${barW}px;height:${h}px;background:${color}`;
+    wrap.appendChild(bar);
+
+    const val = document.createElement('div');
+    val.className = 'val';
+    val.textContent = v;
+    wrap.appendChild(val);
+
+    const idxEl = document.createElement('div');
+    idxEl.className = 'idx';
+    idxEl.textContent = idx;
+    wrap.appendChild(idxEl);
+
+    barRow.appendChild(wrap);
+  });
+  el.appendChild(barRow);
+}
+
+// ============================================================
+// Panel 1: Partition step-by-step
+// ============================================================
+let partArr, partSteps, partIdx, partTimer;
+
+function generatePartSteps(arr, type) {
+  const steps = [];
+  const a = [...arr];
+  const lo = 0, hi = a.length - 1;
+
+  if (type === 'lomuto') {
+    const pivot = a[hi];
+    let i = lo;
+    steps.push({ arr: [...a], phase: 'init', pivot, pivotIdx: hi, i, j: lo,
+      desc: `Lomuto: pivot = arr[${hi}] = ${pivot}，i=${i} 从左边开始` });
+
+    for (let j = lo; j < hi; j++) {
+      // Comparing
+      steps.push({ arr: [...a], phase: 'compare', pivot, pivotIdx: hi, i, j,
+        desc: `j=${j}: arr[${j}]=${a[j]} ${a[j] < pivot ? '<' : '>='} pivot(${pivot})${a[j] < pivot ? ' → 交换 arr[i] 和 arr[j]' : ' → 跳过'}` });
+
+      if (a[j] < pivot) {
+        [a[i], a[j]] = [a[j], a[i]];
+        steps.push({ arr: [...a], phase: 'swap', pivot, pivotIdx: hi, i, j,
+          desc: `交换 arr[${i}]↔arr[${j}]，i++ → i=${i+1}` });
+        i++;
+      }
+    }
+    // Final: put pivot in place
+    [a[i], a[hi]] = [a[hi], a[i]];
+    steps.push({ arr: [...a], phase: 'done', pivot, pivotIdx: i, i,
+      desc: `Partition 完成! pivot(${pivot}) 放到位置 ${i}。左边 < ${pivot}，右边 >= ${pivot}` });
+
+  } else {
+    // Hoare
+    const mid = Math.floor((lo + hi) / 2);
+    const pivot = a[mid];
+    let i = lo - 1, j = hi + 1;
+    steps.push({ arr: [...a], phase: 'init', pivot, i: lo, j: hi,
+      desc: `Hoare: pivot = arr[mid] = ${pivot}，两指针从两端开始` });
+
+    while (true) {
+      i++;
+      while (a[i] < pivot) {
+        steps.push({ arr: [...a], phase: 'scan_left', pivot, i, j: j - 1 < 0 ? hi : j,
+          desc: `左指针 i=${i}: arr[${i}]=${a[i]} < ${pivot} → 继续右移` });
+        i++;
+      }
+      steps.push({ arr: [...a], phase: 'stop_left', pivot, i, j: j === hi + 1 ? hi : j,
+        desc: `左指针停在 i=${i}: arr[${i}]=${a[i]} >= ${pivot}` });
+
+      j--;
+      while (a[j] > pivot) {
+        steps.push({ arr: [...a], phase: 'scan_right', pivot, i, j,
+          desc: `右指针 j=${j}: arr[${j}]=${a[j]} > ${pivot} → 继续左移` });
+        j--;
+      }
+      steps.push({ arr: [...a], phase: 'stop_right', pivot, i, j,
+        desc: `右指针停在 j=${j}: arr[${j}]=${a[j]} <= ${pivot}` });
+
+      if (i >= j) {
+        steps.push({ arr: [...a], phase: 'done', pivot, splitAt: j,
+          desc: `i(${i}) >= j(${j})，Partition 完成! 分界点 = ${j}` });
+        break;
+      }
+      [a[i], a[j]] = [a[j], a[i]];
+      steps.push({ arr: [...a], phase: 'swap', pivot, i, j,
+        desc: `交换 arr[${i}](${a[j]})↔arr[${j}](${a[i]})` });
+    }
+  }
+  return steps;
+}
+
+function resetPart() {
+  if (partTimer) { clearInterval(partTimer); partTimer = null; document.getElementById('partAutoBtn').classList.remove('on'); }
+  const dataKey = document.getElementById('partData').value;
+  const type = document.getElementById('partType').value;
+  partArr = [...(DATASETS[dataKey] || DATASETS.random)];
+  partSteps = generatePartSteps(partArr, type);
+  partIdx = 0;
+  showPartStep();
+  showPartCode(type);
+}
+
+function stepPart() {
+  if (!partSteps) resetPart();
+  if (partIdx < partSteps.length - 1) partIdx++;
+  showPartStep();
+}
+
+function autoPart() {
+  const btn = document.getElementById('partAutoBtn');
+  if (partTimer) { clearInterval(partTimer); partTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!partSteps) resetPart();
+  partTimer = setInterval(() => {
+    if (partIdx >= partSteps.length - 1) { clearInterval(partTimer); partTimer = null; btn.classList.remove('on'); return; }
+    partIdx++;
+    showPartStep();
+  }, 700);
+}
+
+function showPartStep() {
+  const s = partSteps[partIdx];
+  const hl = {};
+  const ptrs = {};
+
+  if (s.phase === 'init') {
+    if (s.pivotIdx != null) hl[s.pivotIdx] = '#e94560';
+  } else if (s.phase === 'compare') {
+    hl[s.pivotIdx] = '#e94560';
+    for (let k = 0; k < s.i; k++) hl[k] = '#66bb6a';
+    hl[s.j] = '#4fc3f7';
+    ptrs['i'] = s.i; ptrs['j'] = s.j;
+  } else if (s.phase === 'swap' && s.pivotIdx != null) {
+    hl[s.pivotIdx] = '#e94560';
+    for (let k = 0; k <= s.i; k++) hl[k] = '#66bb6a';
+    hl[s.j] = '#4fc3f7';
+    ptrs['i'] = s.i; ptrs['j'] = s.j;
+  } else if (s.phase === 'done') {
+    if (s.pivotIdx != null) {
+      hl[s.pivotIdx] = '#e94560';
+      for (let k = 0; k < s.pivotIdx; k++) hl[k] = '#66bb6a';
+      for (let k = s.pivotIdx + 1; k < s.arr.length; k++) hl[k] = '#ffd54f';
+    } else if (s.splitAt != null) {
+      for (let k = 0; k <= s.splitAt; k++) hl[k] = '#66bb6a';
+      for (let k = s.splitAt + 1; k < s.arr.length; k++) hl[k] = '#ffd54f';
+    }
+  } else if (s.phase === 'scan_left' || s.phase === 'stop_left') {
+    ptrs['i'] = s.i; if (s.j != null) ptrs['j'] = s.j;
+    hl[s.i] = '#4fc3f7';
+  } else if (s.phase === 'scan_right' || s.phase === 'stop_right') {
+    ptrs['i'] = s.i; ptrs['j'] = s.j;
+    hl[s.j] = '#ffd54f';
+    hl[s.i] = '#4fc3f7';
+  } else if (s.phase === 'swap') {
+    ptrs['i'] = s.i; ptrs['j'] = s.j;
+    hl[s.i] = '#4fc3f7'; hl[s.j] = '#ffd54f';
+  }
+
+  renderBars('partArea', s.arr, hl, ptrs);
+  document.getElementById('partInfo').innerHTML =
+    `<b>Step ${partIdx}/${partSteps.length - 1}</b>: ${s.desc}`;
+}
+
+function showPartCode(type) {
+  const title = type === 'lomuto' ? 'solution.py — Lomuto Partition' : 'solution.py — Hoare Partition';
+  document.getElementById('partCodeTitle').textContent = title;
+  document.getElementById('partCode').innerHTML = type === 'lomuto' ? `<span class="kw">def</span> <span class="fn">lomuto_partition</span>(arr, lo, hi):
+    <span class="comment">"""
+    以 arr[hi] 为 pivot
+    arr[lo..i-1]  < pivot
+    arr[i..j-1]  >= pivot
+    """</span>
+<span class="hl">    pivot = arr[hi]</span>
+    i = lo
+
+    <span class="kw">for</span> j <span class="kw">in</span> range(lo, hi):
+<span class="hl">        <span class="kw">if</span> arr[j] < pivot:
+            arr[i], arr[j] = arr[j], arr[i]
+            i += <span class="num">1</span></span>
+
+    <span class="comment"># pivot 放到最终位置</span>
+<span class="hl">    arr[i], arr[hi] = arr[hi], arr[i]</span>
+    <span class="kw">return</span> i` : `<span class="kw">def</span> <span class="fn">hoare_partition</span>(arr, lo, hi):
+    <span class="comment">"""
+    两指针从两端夹逼
+    比 Lomuto 交换次数更少
+    """</span>
+<span class="hl">    pivot = arr[(lo + hi) // <span class="num">2</span>]</span>
+    i, j = lo - <span class="num">1</span>, hi + <span class="num">1</span>
+
+    <span class="kw">while</span> True:
+<span class="hl">        i += <span class="num">1</span>
+        <span class="kw">while</span> arr[i] < pivot: i += <span class="num">1</span>
+        j -= <span class="num">1</span>
+        <span class="kw">while</span> arr[j] > pivot: j -= <span class="num">1</span></span>
+
+        <span class="kw">if</span> i >= j:
+            <span class="kw">return</span> j
+<span class="hl">        arr[i], arr[j] = arr[j], arr[i]</span>`;
+}
+
+// ============================================================
+// Panel 2: Recursive vs Iterative full sort
+// ============================================================
+let sortArr, sortSteps, sortIdx, sortTimer;
+
+function generateSortSteps(origArr) {
+  const steps = [];
+  const arr = [...origArr];
+  const n = arr.length;
+
+  // We'll simulate both recursive and iterative side by side
+  // Record each partition operation
+  const recStack = [];  // recursive call stack trace
+  const iterStack = []; // explicit stack trace
+
+  function recordPartition(a, lo, hi) {
+    const pivot = a[hi];
+    let i = lo;
+    for (let j = lo; j < hi; j++) {
+      if (a[j] < pivot) {
+        [a[i], a[j]] = [a[j], a[i]];
+        i++;
+      }
+    }
+    [a[i], a[hi]] = [a[hi], a[i]];
+    return i;
+  }
+
+  // Iterative sort recording steps
+  const stack = [[0, n - 1]];
+  let stepNum = 0;
+  steps.push({ arr: [...arr], lo: 0, hi: n-1, phase: 'start', pivotIdx: -1,
+    recStack: [`qsort(0, ${n-1})`], iterStack: [`(0, ${n-1})`],
+    desc: '初始状态，两种方式都要处理整个数组' });
+
+  while (stack.length > 0) {
+    const [lo, hi] = stack.pop();
+    if (lo >= hi) continue;
+
+    stepNum++;
+    const p = recordPartition(arr, lo, hi);
+
+    const recS = [];
+    // Simulate what recursive stack would look like
+    // (simplified: show current call)
+    recS.push(`→ qsort(${lo}, ${hi})`);
+    recS.push(`  partition → pivot_idx=${p}`);
+    if (p - 1 > lo) recS.push(`  qsort(${lo}, ${p-1})`);
+    if (p + 1 < hi) recS.push(`  qsort(${p+1}, ${hi})`);
+
+    const iterS = stack.map(([a,b]) => `(${a}, ${b})`);
+
+    steps.push({
+      arr: [...arr], lo, hi, phase: 'partition', pivotIdx: p, p,
+      recStack: recS,
+      iterStack: [`→ pop (${lo},${hi})`, `  partition → p=${p}`, ...( p-1>lo ? [`  push (${lo},${p-1})`] : []), ...(p+1<hi ? [`  push (${p+1},${hi})`] : []), '---', ...iterS.map(s => `  栈: ${s}`)],
+      desc: `Partition [${lo}..${hi}]: pivot=${arr[p]} 放到位置 ${p}`
+    });
+
+    // Push in order: larger first so smaller is processed first
+    if (p - 1 - lo > hi - p - 1) {
+      if (lo < p - 1) stack.push([lo, p - 1]);
+      if (p + 1 < hi) stack.push([p + 1, hi]);
+    } else {
+      if (p + 1 < hi) stack.push([p + 1, hi]);
+      if (lo < p - 1) stack.push([lo, p - 1]);
+    }
+  }
+
+  steps.push({ arr: [...arr], phase: 'done', pivotIdx: -1,
+    recStack: ['排序完成!'], iterStack: ['栈空, 排序完成!'],
+    desc: '排序完成! 两种方式结果完全一致' });
+
+  return steps;
+}
+
+function resetSort() {
+  if (sortTimer) { clearInterval(sortTimer); sortTimer = null; document.getElementById('sortAutoBtn').classList.remove('on'); }
+  const key = document.getElementById('sortData').value;
+  const data = key === 'sorted' ? [1,2,3,4,5,6,7,8] : key === 'reverse' ? [8,7,6,5,4,3,2,1] : [5,3,8,6,2,7,1,4,9];
+  sortSteps = generateSortSteps(data);
+  sortIdx = 0;
+  showSortStep();
+  showSortCode();
+}
+
+function stepSort() {
+  if (!sortSteps) resetSort();
+  if (sortIdx < sortSteps.length - 1) sortIdx++;
+  showSortStep();
+}
+
+function autoSort() {
+  const btn = document.getElementById('sortAutoBtn');
+  if (sortTimer) { clearInterval(sortTimer); sortTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!sortSteps) resetSort();
+  sortTimer = setInterval(() => {
+    if (sortIdx >= sortSteps.length - 1) { clearInterval(sortTimer); sortTimer = null; btn.classList.remove('on'); return; }
+    sortIdx++;
+    showSortStep();
+  }, 1000);
+}
+
+function showSortStep() {
+  const s = sortSteps[sortIdx];
+  const hl = {};
+  if (s.phase === 'partition') {
+    for (let k = s.lo; k <= s.hi; k++) hl[k] = '#0f3460';
+    hl[s.pivotIdx] = '#e94560';
+    for (let k = s.lo; k < s.pivotIdx; k++) hl[k] = '#66bb6a';
+    for (let k = s.pivotIdx + 1; k <= s.hi; k++) hl[k] = '#ffd54f';
+  } else if (s.phase === 'done') {
+    for (let k = 0; k < s.arr.length; k++) hl[k] = '#66bb6a';
+  }
+  renderBars('sortArea', s.arr, hl, {});
+
+  // Stacks
+  document.getElementById('recStack').innerHTML = (s.recStack || [])
+    .map((line, i) => `<div class="stack-item${i === 0 ? ' active' : ''}">${line}</div>`).join('');
+  document.getElementById('iterStack').innerHTML = (s.iterStack || [])
+    .map((line, i) => `<div class="stack-item${i === 0 ? ' active' : ''}">${line}</div>`).join('');
+
+  document.getElementById('sortInfo').innerHTML = `<b>Step ${sortIdx}</b>: ${s.desc}`;
+}
+
+function showSortCode() {
+  document.getElementById('sortCode').innerHTML = `<span class="comment"># ===== 递归版 =====</span>
+<span class="kw">def</span> <span class="fn">quicksort_recursive</span>(arr, lo, hi):
+    <span class="kw">if</span> lo < hi:
+        p = partition(arr, lo, hi)
+<span class="hl">        quicksort_recursive(arr, lo, p-<span class="num">1</span>)
+        quicksort_recursive(arr, p+<span class="num">1</span>, hi)</span>
+
+<span class="comment"># ===== 非递归版 =====</span>
+<span class="kw">def</span> <span class="fn">quicksort_iterative</span>(arr):
+<span class="hl">    stack = [(<span class="num">0</span>, len(arr)-<span class="num">1</span>)]
+    <span class="kw">while</span> stack:
+        lo, hi = stack.pop()
+        <span class="kw">if</span> lo >= hi: <span class="kw">continue</span>
+        p = partition(arr, lo, hi)
+        stack.append((lo, p-<span class="num">1</span>))
+        stack.append((p+<span class="num">1</span>, hi))</span>
+
+<span class="comment"># 两者本质相同:</span>
+<span class="comment"># 递归 = 隐式调用栈</span>
+<span class="comment"># 非递归 = 显式栈</span>
+<span class="comment"># 非递归优势: 不会栈溢出</span>`;
+}
+
+// ============================================================
+// Panel 3: 3-way partition
+// ============================================================
+let threeArr, threeSteps, threeIdx, threeTimer;
+
+function generateThreeSteps() {
+  const origArr = [3,1,4,1,5,9,2,6,5,3,5];
+  const steps = [];
+  const a = [...origArr];
+  const pivot = a[0];
+  let lt = 0, i = 1, gt = a.length - 1;
+
+  steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'init',
+    desc: `pivot = arr[0] = ${pivot}。三个指针: lt=${lt}, i=${i}, gt=${gt}` });
+
+  while (i <= gt) {
+    if (a[i] < pivot) {
+      steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'less',
+        desc: `arr[${i}]=${a[i]} < pivot(${pivot}) → 交换 arr[lt]↔arr[i]，lt++, i++` });
+      [a[lt], a[i]] = [a[i], a[lt]];
+      lt++; i++;
+      steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'after_less',
+        desc: `交换后: lt=${lt}, i=${i}` });
+    } else if (a[i] > pivot) {
+      steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'greater',
+        desc: `arr[${i}]=${a[i]} > pivot(${pivot}) → 交换 arr[gt]↔arr[i]，gt--` });
+      [a[gt], a[i]] = [a[i], a[gt]];
+      gt--;
+      steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'after_greater',
+        desc: `交换后: gt=${gt}（i 不动，因为换来的值还没检查）` });
+    } else {
+      steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'equal',
+        desc: `arr[${i}]=${a[i]} == pivot(${pivot}) → i++ 跳过` });
+      i++;
+    }
+  }
+
+  steps.push({ arr: [...a], lt, i, gt, pivot, phase: 'done',
+    desc: `完成! arr[${lt}..${gt}] 全是 ${pivot}，不再递归。只需递归 [0..${lt-1}] 和 [${gt+1}..${a.length-1}]` });
+
+  return steps;
+}
+
+function resetThree() {
+  if (threeTimer) { clearInterval(threeTimer); threeTimer = null; document.getElementById('threeAutoBtn').classList.remove('on'); }
+  threeSteps = generateThreeSteps();
+  threeIdx = 0;
+  showThreeStep();
+  showThreeCode();
+}
+
+function stepThree() {
+  if (!threeSteps) resetThree();
+  if (threeIdx < threeSteps.length - 1) threeIdx++;
+  showThreeStep();
+}
+
+function autoThree() {
+  const btn = document.getElementById('threeAutoBtn');
+  if (threeTimer) { clearInterval(threeTimer); threeTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!threeSteps) resetThree();
+  threeTimer = setInterval(() => {
+    if (threeIdx >= threeSteps.length - 1) { clearInterval(threeTimer); threeTimer = null; btn.classList.remove('on'); return; }
+    threeIdx++;
+    showThreeStep();
+  }, 800);
+}
+
+function showThreeStep() {
+  const s = threeSteps[threeIdx];
+  const hl = {};
+  const ptrs = {};
+
+  for (let k = 0; k < s.arr.length; k++) {
+    if (k < s.lt) hl[k] = '#66bb6a';         // < pivot
+    else if (k >= s.lt && k < s.i) hl[k] = '#e94560';  // == pivot
+    else if (k > s.gt) hl[k] = '#ffd54f';     // > pivot
+    else hl[k] = '#555';                       // 未扫描
+  }
+  if (s.phase !== 'done') {
+    ptrs['lt'] = s.lt;
+    ptrs['i'] = s.i;
+    ptrs['gt'] = s.gt;
+  }
+
+  renderBars('threeArea', s.arr, hl, ptrs);
+  document.getElementById('threeInfo').innerHTML =
+    `<b>Step ${threeIdx}/${threeSteps.length-1}</b>: ${s.desc}`;
+}
+
+function showThreeCode() {
+  document.getElementById('threeCode').innerHTML = `<span class="kw">def</span> <span class="fn">quicksort_3way</span>(arr, lo, hi):
+    <span class="kw">if</span> lo >= hi: <span class="kw">return</span>
+
+<span class="hl">    pivot = arr[lo]
+    lt, i, gt = lo, lo + <span class="num">1</span>, hi</span>
+
+    <span class="kw">while</span> i <= gt:
+        <span class="kw">if</span> arr[i] < pivot:
+<span class="hl">            arr[lt], arr[i] = arr[i], arr[lt]
+            lt += <span class="num">1</span>; i += <span class="num">1</span></span>
+        <span class="kw">elif</span> arr[i] > pivot:
+<span class="hl">            arr[gt], arr[i] = arr[i], arr[gt]
+            gt -= <span class="num">1</span>
+            <span class="comment"># 不 i++, 换来的还没检查</span></span>
+        <span class="kw">else</span>:
+            i += <span class="num">1</span>  <span class="comment"># == pivot, 跳过</span>
+
+    <span class="comment"># arr[lt..gt] 全是 pivot</span>
+    quicksort_3way(arr, lo, lt - <span class="num">1</span>)
+    quicksort_3way(arr, gt + <span class="num">1</span>, hi)`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+resetPart();
+</script>
+</body>
+</html>

@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>线性回归 — Forward & Backward 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:1100px;margin:0 auto}
+  .panel.active{display:block}
+  canvas{display:block;border:1px solid #0f3460;border-radius:8px;background:#0d1b2a}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls select,.controls input[type=number]{padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  .main-area{display:flex;gap:14px;align-items:flex-start}
+  .code-panel{min-width:260px;max-width:340px}
+  .code-block{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;font-size:.72em;line-height:1.7;overflow-x:auto;white-space:pre;max-height:520px;overflow-y:auto}
+  .code-block .hl{background:#e9456033;display:inline;border-radius:2px}
+  .code-block .comment{color:#555}
+  .code-block .kw{color:#ab47bc}
+  .code-block .fn{color:#4fc3f7}
+  .code-block .num{color:#ffd54f}
+  .code-title{font-size:.8em;color:#888;margin-bottom:6px}
+
+  .chart-row{display:flex;gap:12px;flex-wrap:wrap}
+  .chart-row canvas{flex:1;min-width:300px}
+</style>
+</head>
+<body>
+
+<h1>多元线性回归</h1>
+<p class="subtitle">Forward → Loss → Backward → Update — 不同学习率对比</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">学习率对比</button>
+  <button class="tab-btn" onclick="switchTab(1)">Forward & Backward</button>
+  <button class="tab-btn" onclick="switchTab(2)">Loss 曲面</button>
+</div>
+
+<!-- ============== Panel 1: Learning Rate Comparison ============== -->
+<div class="panel active" id="panel-0">
+  <div class="main-area">
+    <div style="flex:1">
+      <div class="chart-row">
+        <canvas id="fitCanvas" width="480" height="360"></canvas>
+        <canvas id="lossCanvas" width="480" height="360"></canvas>
+      </div>
+      <div class="controls">
+        <button onclick="resetLR()">重置</button>
+        <button onclick="stepLR(1)">+1 步</button>
+        <button onclick="stepLR(10)">+10 步</button>
+        <button onclick="stepLR(50)">+50 步</button>
+        <button id="lrAutoBtn" onclick="autoLR()">自动训练</button>
+        <label>数据噪声:</label>
+        <select id="noiseLevel" onchange="resetLR()">
+          <option value="0.3">低 (0.3)</option>
+          <option value="0.8" selected>中 (0.8)</option>
+          <option value="2.0">高 (2.0)</option>
+        </select>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">solution.py — 训练循环</div>
+      <div class="code-block" id="lrCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="lrInfo">
+    5 种学习率同时训练，左图看拟合直线，右图看 loss 下降曲线。点击「自动训练」开始。
+  </div>
+</div>
+
+<!-- ============== Panel 2: Forward & Backward step-by-step ============== -->
+<div class="panel" id="panel-1">
+  <div class="main-area">
+    <div style="flex:1">
+      <canvas id="fbCanvas" width="680" height="400"></canvas>
+      <div class="controls">
+        <button onclick="resetFB()">重置</button>
+        <button onclick="stepFB()">下一步</button>
+        <button id="fbAutoBtn" onclick="autoFB()">自动</button>
+        <label>lr =</label>
+        <input type="number" id="fbLR" value="0.05" step="0.01" min="0.001" max="2" style="width:70px">
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title" id="fbCodeTitle">solution.py — Forward & Backward</div>
+      <div class="code-block" id="fbCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="fbInfo">逐步展示 forward → loss → backward → update 每一步的计算。</div>
+</div>
+
+<!-- ============== Panel 3: Loss Surface ============== -->
+<div class="panel" id="panel-2">
+  <div class="main-area">
+    <div style="flex:1">
+      <canvas id="surfCanvas" width="520" height="480"></canvas>
+      <div class="controls">
+        <button onclick="resetSurf()">重置</button>
+        <button onclick="stepSurf(1)">+1 步</button>
+        <button onclick="stepSurf(20)">+20 步</button>
+        <button id="surfAutoBtn" onclick="autoSurf()">自动</button>
+        <label>lr =</label>
+        <select id="surfLR" onchange="resetSurf()">
+          <option value="0.001">0.001 (太慢)</option>
+          <option value="0.01" selected>0.01 (合适)</option>
+          <option value="0.05">0.05 (快)</option>
+          <option value="0.15">0.15 (震荡)</option>
+        </select>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">梯度下降在 loss 曲面上的轨迹</div>
+      <div class="code-block" id="surfCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="surfInfo">等高线图展示 loss 曲面，红点是梯度下降的轨迹。不同学习率走不同的路径。</div>
+</div>
+
+<script>
+// ============================================================
+// Globals
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+  if (i===0 && !lrModels) resetLR();
+  if (i===1 && !fbModel) resetFB();
+  if (i===2) resetSurf();
+}
+
+const DPR = Math.min(devicePixelRatio, 2);
+const canvasCache = {};
+function getCtx(id) {
+  if (!canvasCache[id]) {
+    const c = document.getElementById(id);
+    const w = +c.getAttribute('width'), h = +c.getAttribute('height');
+    c.width = w * DPR; c.height = h * DPR;
+    c.style.width = w + 'px'; c.style.height = h + 'px';
+    const ctx = c.getContext('2d');
+    ctx.scale(DPR, DPR);
+    canvasCache[id] = { ctx, W: w, H: h };
+  }
+  const cc = canvasCache[id];
+  cc.ctx.save();
+  cc.ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  cc.ctx.clearRect(0, 0, cc.W, cc.H);
+  cc.ctx.restore();
+  return cc;
+}
+
+// Seeded RNG
+let seed = 42;
+function srand(s) { seed = s; }
+function rand() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+function randn() { return Math.sqrt(-2 * Math.log(rand())) * Math.cos(2 * Math.PI * rand()); }
+
+// ============================================================
+// Simple 1D linear regression engine (for visualization)
+// ============================================================
+class LinReg {
+  constructor() { this.w = 0; this.b = 0; }
+
+  forward(X) {
+    // X: array of numbers, returns array
+    return X.map(x => this.w * x + this.b);
+  }
+
+  trainStep(X, Y, lr) {
+    const N = X.length;
+    const yHat = this.forward(X);
+
+    // Loss
+    let loss = 0;
+    for (let i = 0; i < N; i++) loss += (yHat[i] - Y[i]) ** 2;
+    loss /= (2 * N);
+
+    // Backward
+    let gradW = 0, gradB = 0;
+    for (let i = 0; i < N; i++) {
+      const e = yHat[i] - Y[i];
+      gradW += e * X[i];
+      gradB += e;
+    }
+    gradW /= N;
+    gradB /= N;
+
+    // Update
+    this.w -= lr * gradW;
+    this.b -= lr * gradB;
+
+    return { loss, gradW, gradB };
+  }
+}
+
+// ============================================================
+// Generate 1D data: y = true_w * x + true_b + noise
+// ============================================================
+let dataX, dataY;
+const TRUE_W = 2.5, TRUE_B = 1.0;
+
+function generateData(noise = 0.8) {
+  srand(42);
+  const N = 40;
+  dataX = []; dataY = [];
+  for (let i = 0; i < N; i++) {
+    const x = -3 + 6 * rand();
+    const y = TRUE_W * x + TRUE_B + randn() * noise;
+    dataX.push(x);
+    dataY.push(y);
+  }
+}
+
+// ============================================================
+// Panel 1: Learning Rate Comparison
+// ============================================================
+const LR_CONFIGS = [
+  { lr: 0.001, color: '#78909c', label: 'lr=0.001 (太慢)' },
+  { lr: 0.01,  color: '#4fc3f7', label: 'lr=0.01' },
+  { lr: 0.05,  color: '#66bb6a', label: 'lr=0.05 (合适)' },
+  { lr: 0.2,   color: '#ffd54f', label: 'lr=0.2 (快)' },
+  { lr: 0.8,   color: '#e94560', label: 'lr=0.8 (震荡)' },
+];
+
+let lrModels, lrLosses, lrEpoch, lrTimer;
+
+function resetLR() {
+  if (lrTimer) { clearInterval(lrTimer); lrTimer = null; document.getElementById('lrAutoBtn').classList.remove('on'); }
+  const noise = +document.getElementById('noiseLevel').value;
+  generateData(noise);
+  lrModels = LR_CONFIGS.map(() => new LinReg());
+  lrLosses = LR_CONFIGS.map(() => []);
+  lrEpoch = 0;
+  drawLR();
+  showLRCode();
+}
+
+function stepLR(n) {
+  if (!lrModels) resetLR();
+  for (let s = 0; s < n; s++) {
+    lrEpoch++;
+    LR_CONFIGS.forEach((cfg, i) => {
+      const { loss } = lrModels[i].trainStep(dataX, dataY, cfg.lr);
+      lrLosses[i].push(Math.min(loss, 100)); // cap for display
+    });
+  }
+  drawLR();
+}
+
+function autoLR() {
+  const btn = document.getElementById('lrAutoBtn');
+  if (lrTimer) { clearInterval(lrTimer); lrTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!lrModels) resetLR();
+  lrTimer = setInterval(() => {
+    stepLR(2);
+    if (lrEpoch > 300) { clearInterval(lrTimer); lrTimer = null; btn.classList.remove('on'); }
+  }, 50);
+}
+
+function drawLR() {
+  drawFitChart();
+  drawLossChart();
+  updateLRInfo();
+}
+
+function drawFitChart() {
+  const { ctx, W, H } = getCtx('fitCanvas');
+  const pad = { l: 45, r: 15, t: 30, b: 35 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+
+  // Axis ranges
+  const xMin = -3.5, xMax = 3.5, yMin = -10, yMax = 12;
+  function tx(x) { return pad.l + (x - xMin) / (xMax - xMin) * pw; }
+  function ty(y) { return pad.t + (1 - (y - yMin) / (yMax - yMin)) * ph; }
+
+  // Grid
+  ctx.strokeStyle = '#0f346033'; ctx.lineWidth = 0.5;
+  for (let x = -3; x <= 3; x++) { ctx.beginPath(); ctx.moveTo(tx(x), pad.t); ctx.lineTo(tx(x), H - pad.b); ctx.stroke(); }
+  for (let y = -8; y <= 10; y += 4) { ctx.beginPath(); ctx.moveTo(pad.l, ty(y)); ctx.lineTo(W - pad.r, ty(y)); ctx.stroke(); }
+
+  // Axes labels
+  ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  for (let x = -3; x <= 3; x++) ctx.fillText(x, tx(x), H - pad.b + 14);
+  ctx.textAlign = 'right';
+  for (let y = -8; y <= 10; y += 4) ctx.fillText(y, pad.l - 6, ty(y) + 3);
+
+  // Title
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`拟合直线 (epoch ${lrEpoch})`, W / 2, 16);
+
+  // Data points
+  ctx.globalAlpha = 0.5;
+  dataX.forEach((x, i) => {
+    ctx.beginPath();
+    ctx.arc(tx(x), ty(dataY[i]), 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#888';
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  // True line
+  ctx.strokeStyle = '#ffffff33'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(tx(xMin), ty(TRUE_W * xMin + TRUE_B));
+  ctx.lineTo(tx(xMax), ty(TRUE_W * xMax + TRUE_B));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Fitted lines
+  LR_CONFIGS.forEach((cfg, i) => {
+    const m = lrModels[i];
+    if (Math.abs(m.w) > 50 || Math.abs(m.b) > 100) return; // skip diverged
+    ctx.strokeStyle = cfg.color; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(tx(xMin), ty(m.w * xMin + m.b));
+    ctx.lineTo(tx(xMax), ty(m.w * xMax + m.b));
+    ctx.stroke();
+  });
+
+  // Legend
+  const legY = pad.t + 8;
+  LR_CONFIGS.forEach((cfg, i) => {
+    ctx.fillStyle = cfg.color; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+    ctx.fillRect(pad.l + 4, legY + i * 14, 10, 8);
+    ctx.fillText(cfg.label, pad.l + 18, legY + i * 14 + 8);
+  });
+}
+
+function drawLossChart() {
+  const { ctx, W, H } = getCtx('lossCanvas');
+  const pad = { l: 55, r: 15, t: 30, b: 35 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+
+  if (lrEpoch === 0) {
+    ctx.fillStyle = '#555'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('训练后显示 Loss 曲线', W/2, H/2);
+    return;
+  }
+
+  const maxEpoch = lrEpoch;
+  // Find max loss for y scale (excluding diverged, cap at 20)
+  let maxLoss = 1;
+  lrLosses.forEach(losses => {
+    const valid = losses.filter(l => l < 50);
+    if (valid.length > 0) maxLoss = Math.max(maxLoss, Math.max(...valid));
+  });
+  maxLoss = Math.min(maxLoss * 1.2, 50);
+
+  function tx(e) { return pad.l + (e / maxEpoch) * pw; }
+  function ty(l) { return pad.t + (1 - l / maxLoss) * ph; }
+
+  // Grid
+  ctx.strokeStyle = '#0f346033'; ctx.lineWidth = 0.5;
+  for (let y = 0; y <= maxLoss; y += Math.max(1, Math.floor(maxLoss / 5))) {
+    ctx.beginPath(); ctx.moveTo(pad.l, ty(y)); ctx.lineTo(W - pad.r, ty(y)); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y.toFixed(1), pad.l - 6, ty(y) + 3);
+  }
+
+  // Labels
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Loss 曲线', W / 2, 16);
+  ctx.fillStyle = '#555'; ctx.font = '9px monospace';
+  ctx.fillText('epoch', (pad.l + W - pad.r) / 2, H - 8);
+
+  // Loss curves
+  LR_CONFIGS.forEach((cfg, ci) => {
+    const losses = lrLosses[ci];
+    if (losses.length === 0) return;
+    ctx.strokeStyle = cfg.color; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    losses.forEach((l, e) => {
+      const x = tx(e), y = ty(Math.min(l, maxLoss));
+      if (e === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Current loss dot
+    const lastL = losses[losses.length - 1];
+    if (lastL < maxLoss) {
+      ctx.beginPath();
+      ctx.arc(tx(losses.length - 1), ty(lastL), 3, 0, Math.PI * 2);
+      ctx.fillStyle = cfg.color;
+      ctx.fill();
+    }
+  });
+
+  // Optimal loss line
+  let optLoss = 0;
+  dataX.forEach((x, i) => optLoss += (TRUE_W * x + TRUE_B - dataY[i]) ** 2);
+  optLoss /= (2 * dataX.length);
+  if (optLoss < maxLoss) {
+    ctx.strokeStyle = '#ffffff33'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(pad.l, ty(optLoss)); ctx.lineTo(W - pad.r, ty(optLoss)); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#555'; ctx.font = '8px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(`最优=${optLoss.toFixed(3)}`, W - pad.r - 70, ty(optLoss) - 4);
+  }
+}
+
+function updateLRInfo() {
+  let html = `<b>Epoch ${lrEpoch}</b> — 各学习率状态:<br>`;
+  LR_CONFIGS.forEach((cfg, i) => {
+    const m = lrModels[i];
+    const losses = lrLosses[i];
+    const l = losses.length > 0 ? losses[losses.length - 1] : '—';
+    const lStr = typeof l === 'number' ? (l > 50 ? '<span class="c-red">发散!</span>' : l.toFixed(4)) : l;
+    const wStr = Math.abs(m.w) < 100 ? `w=${m.w.toFixed(3)}, b=${m.b.toFixed(3)}` : '参数爆炸';
+    html += `<span style="color:${cfg.color}">${cfg.label}</span>: loss=${lStr} | ${wStr}<br>`;
+  });
+  html += `<span style="color:#555">白色虚线 = 真实值 (w=${TRUE_W}, b=${TRUE_B})</span>`;
+  document.getElementById('lrInfo').innerHTML = html;
+}
+
+function showLRCode() {
+  document.getElementById('lrCode').innerHTML = `<span class="comment"># solution.py — 训练循环</span>
+
+<span class="kw">def</span> <span class="fn">train_step</span>(self, X, y, lr):
+<span class="hl">    <span class="comment"># 1. Forward</span>
+    self.forward(X)
+    <span class="comment"># ŷ = X @ w + b</span>
+
+    <span class="comment"># 2. Loss</span>
+    l = self.loss(y)
+    <span class="comment"># L = (1/2N)||ŷ - y||²</span>
+
+    <span class="comment"># 3. Backward</span>
+    self.backward()
+    <span class="comment"># ∂L/∂w = (1/N) X^T(ŷ-y)</span>
+    <span class="comment"># ∂L/∂b = (1/N) Σ(ŷ-y)</span>
+
+    <span class="comment"># 4. Update</span>
+    self.update(lr)
+    <span class="comment"># w -= lr * ∂L/∂w</span>
+    <span class="comment"># b -= lr * ∂L/∂b</span></span>
+
+    <span class="kw">return</span> l
+
+<span class="comment"># 学习率影响:</span>
+<span class="comment"># 太小 → 收敛慢 (0.001)</span>
+<span class="comment"># 合适 → 稳定收敛 (0.05)</span>
+<span class="comment"># 太大 → 震荡/发散 (0.8)</span>
+<span class="comment"># 阈值 = 2/λ_max(Hessian)</span>`;
+}
+
+// ============================================================
+// Panel 2: Forward & Backward step-by-step
+// ============================================================
+let fbModel, fbEpoch, fbPhase, fbTimer, fbLastResult;
+// phases: 'forward' → 'loss' → 'backward' → 'update' → repeat
+
+const FB_CODES = {
+  forward: `<span class="comment"># Step 1: Forward</span>
+<span class="kw">def</span> <span class="fn">forward</span>(self, X):
+<span class="hl">    self.y_hat = X @ self.w + self.b</span>
+    <span class="kw">return</span> self.y_hat
+
+<span class="comment"># X: (N, D)  @ w: (D, 1) + b</span>
+<span class="comment"># → ŷ: (N, 1)</span>`,
+
+  loss: `<span class="comment"># Step 2: Loss (MSE)</span>
+<span class="kw">def</span> <span class="fn">loss</span>(self, y):
+<span class="hl">    self.residual = self.y_hat - y
+    L = <span class="num">0.5</span> * np.mean(self.residual ** <span class="num">2</span>)</span>
+    <span class="kw">return</span> L
+
+<span class="comment"># residual = ŷ - y  (误差向量)</span>
+<span class="comment"># L = (1/2N) * ||residual||²</span>`,
+
+  backward: `<span class="comment"># Step 3: Backward</span>
+<span class="kw">def</span> <span class="fn">backward</span>(self):
+    N = self.X.shape[<span class="num">0</span>]
+<span class="hl">    self.grad_w = (<span class="num">1</span>/N) * self.X.T @ self.residual
+    self.grad_b = (<span class="num">1</span>/N) * np.sum(self.residual)</span>
+
+<span class="comment"># ∂L/∂w = (1/N) * X^T @ (ŷ - y)</span>
+<span class="comment"># ∂L/∂b = (1/N) * Σ(ŷ - y)</span>
+<span class="comment">#</span>
+<span class="comment"># 直觉: 梯度 = 特征 × 残差</span>
+<span class="comment"># 残差大 → 梯度大 → 更新多</span>`,
+
+  update: `<span class="comment"># Step 4: Gradient Descent Update</span>
+<span class="kw">def</span> <span class="fn">update</span>(self, lr):
+<span class="hl">    self.w -= lr * self.grad_w
+    self.b -= lr * self.grad_b</span>
+
+<span class="comment"># w 沿负梯度方向移动</span>
+<span class="comment"># 步长 = lr × 梯度大小</span>
+<span class="comment">#</span>
+<span class="comment"># lr 太大 → 步子太大 → 跳过最低点</span>
+<span class="comment"># lr 太小 → 步子太小 → 收敛慢</span>`,
+};
+
+function resetFB() {
+  if (fbTimer) { clearInterval(fbTimer); fbTimer = null; document.getElementById('fbAutoBtn').classList.remove('on'); }
+  generateData(0.8);
+  fbModel = new LinReg();
+  fbEpoch = 0;
+  fbPhase = 'ready';
+  fbLastResult = null;
+  drawFB();
+  document.getElementById('fbCode').innerHTML = FB_CODES.forward;
+  document.getElementById('fbInfo').textContent = '点击「下一步」开始训练。每 4 步 = 一个完整的 forward→loss→backward→update。';
+}
+
+function stepFB() {
+  if (!fbModel) resetFB();
+  const lr = +document.getElementById('fbLR').value || 0.05;
+
+  if (fbPhase === 'ready' || fbPhase === 'update') {
+    // Forward
+    fbPhase = 'forward';
+    fbModel.forward(dataX);
+    document.getElementById('fbCode').innerHTML = FB_CODES.forward;
+    document.getElementById('fbCodeTitle').textContent = `Step 1: Forward (epoch ${fbEpoch + 1})`;
+  } else if (fbPhase === 'forward') {
+    // Loss
+    fbPhase = 'loss';
+    const yHat = fbModel.forward(dataX);
+    let loss = 0;
+    for (let i = 0; i < dataX.length; i++) loss += (yHat[i] - dataY[i]) ** 2;
+    loss /= (2 * dataX.length);
+    fbLastResult = { loss };
+    document.getElementById('fbCode').innerHTML = FB_CODES.loss;
+    document.getElementById('fbCodeTitle').textContent = `Step 2: Loss = ${loss.toFixed(4)}`;
+  } else if (fbPhase === 'loss') {
+    // Backward
+    fbPhase = 'backward';
+    // Compute gradients
+    const N = dataX.length;
+    const yHat = fbModel.forward(dataX);
+    let gradW = 0, gradB = 0;
+    for (let i = 0; i < N; i++) {
+      const e = yHat[i] - dataY[i];
+      gradW += e * dataX[i];
+      gradB += e;
+    }
+    gradW /= N; gradB /= N;
+    fbLastResult.gradW = gradW;
+    fbLastResult.gradB = gradB;
+    document.getElementById('fbCode').innerHTML = FB_CODES.backward;
+    document.getElementById('fbCodeTitle').textContent = `Step 3: Backward — ∂L/∂w=${gradW.toFixed(4)}, ∂L/∂b=${gradB.toFixed(4)}`;
+  } else if (fbPhase === 'backward') {
+    // Update
+    fbPhase = 'update';
+    fbModel.trainStep(dataX, dataY, lr);
+    fbEpoch++;
+    document.getElementById('fbCode').innerHTML = FB_CODES.update;
+    document.getElementById('fbCodeTitle').textContent = `Step 4: Update — w=${fbModel.w.toFixed(4)}, b=${fbModel.b.toFixed(4)}`;
+  }
+  drawFB();
+}
+
+function autoFB() {
+  const btn = document.getElementById('fbAutoBtn');
+  if (fbTimer) { clearInterval(fbTimer); fbTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!fbModel) resetFB();
+  fbTimer = setInterval(() => {
+    stepFB();
+    if (fbEpoch > 200) { clearInterval(fbTimer); fbTimer = null; btn.classList.remove('on'); }
+  }, 300);
+}
+
+function drawFB() {
+  const { ctx, W, H } = getCtx('fbCanvas');
+  const pad = { l: 50, r: 20, t: 40, b: 40 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const xMin = -3.5, xMax = 3.5, yMin = -10, yMax = 12;
+  function tx(x) { return pad.l + (x - xMin) / (xMax - xMin) * pw; }
+  function ty(y) { return pad.t + (1 - (y - yMin) / (yMax - yMin)) * ph; }
+
+  // Grid
+  ctx.strokeStyle = '#0f346033'; ctx.lineWidth = 0.5;
+  for (let x = -3; x <= 3; x++) { ctx.beginPath(); ctx.moveTo(tx(x), pad.t); ctx.lineTo(tx(x), H - pad.b); ctx.stroke(); }
+  for (let y = -8; y <= 10; y += 4) {
+    ctx.beginPath(); ctx.moveTo(pad.l, ty(y)); ctx.lineTo(W - pad.r, ty(y)); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(y, pad.l - 6, ty(y) + 3);
+  }
+
+  // Title
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`Forward & Backward (epoch ${fbEpoch})`, W / 2, 20);
+
+  // Phase indicator
+  const phases = ['forward', 'loss', 'backward', 'update'];
+  const phaseLabels = ['Forward', 'Loss', 'Backward', 'Update'];
+  const phaseIdx = phases.indexOf(fbPhase);
+  phases.forEach((p, i) => {
+    const x = pad.l + 60 + i * 130;
+    ctx.fillStyle = i === phaseIdx ? '#e94560' : '#333';
+    ctx.fillRect(x, 28, 100, 4);
+    ctx.fillStyle = i === phaseIdx ? '#e94560' : '#555';
+    ctx.font = i === phaseIdx ? 'bold 9px monospace' : '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(phaseLabels[i], x + 50, 26);
+  });
+
+  // Data
+  dataX.forEach((x, i) => {
+    ctx.beginPath();
+    ctx.arc(tx(x), ty(dataY[i]), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#888';
+    ctx.globalAlpha = 0.5;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  // Residual lines (show during loss/backward phase)
+  if (fbPhase === 'loss' || fbPhase === 'backward') {
+    const yHat = fbModel.forward(dataX);
+    ctx.globalAlpha = 0.3;
+    dataX.forEach((x, i) => {
+      ctx.strokeStyle = '#e94560'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(tx(x), ty(yHat[i]));
+      ctx.lineTo(tx(x), ty(dataY[i]));
+      ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  // Fitted line
+  if (Math.abs(fbModel.w) < 50) {
+    ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(tx(xMin), ty(fbModel.w * xMin + fbModel.b));
+    ctx.lineTo(tx(xMax), ty(fbModel.w * xMax + fbModel.b));
+    ctx.stroke();
+  }
+
+  // True line
+  ctx.strokeStyle = '#ffffff22'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(tx(xMin), ty(TRUE_W * xMin + TRUE_B));
+  ctx.lineTo(tx(xMax), ty(TRUE_W * xMax + TRUE_B));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Parameters
+  ctx.fillStyle = '#4fc3f7'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`w = ${fbModel.w.toFixed(4)}`, W - 160, pad.t + 20);
+  ctx.fillText(`b = ${fbModel.b.toFixed(4)}`, W - 160, pad.t + 36);
+  if (fbLastResult) {
+    ctx.fillStyle = '#ffd54f';
+    ctx.fillText(`loss = ${fbLastResult.loss.toFixed(4)}`, W - 160, pad.t + 52);
+    if (fbLastResult.gradW != null) {
+      ctx.fillStyle = '#e94560';
+      ctx.fillText(`∂L/∂w = ${fbLastResult.gradW.toFixed(4)}`, W - 160, pad.t + 68);
+      ctx.fillText(`∂L/∂b = ${fbLastResult.gradB.toFixed(4)}`, W - 160, pad.t + 84);
+    }
+  }
+
+  // Info
+  let info = '';
+  if (fbPhase === 'forward') info = `<b>Forward</b>: ŷ = ${fbModel.w.toFixed(3)} × x + ${fbModel.b.toFixed(3)}`;
+  else if (fbPhase === 'loss') info = `<b>Loss</b>: MSE = ${fbLastResult?.loss.toFixed(4)}。<span style="color:#e94560">红色竖线 = 每个点的残差 (ŷ-y)</span>`;
+  else if (fbPhase === 'backward') info = `<b>Backward</b>: ∂L/∂w = ${fbLastResult?.gradW.toFixed(4)}，∂L/∂b = ${fbLastResult?.gradB.toFixed(4)}。梯度 = X^T × 残差`;
+  else if (fbPhase === 'update') info = `<b>Update</b>: w = ${fbModel.w.toFixed(4)}, b = ${fbModel.b.toFixed(4)}。lr=${document.getElementById('fbLR').value}`;
+  else info = '点击「下一步」';
+  document.getElementById('fbInfo').innerHTML = info;
+}
+
+// ============================================================
+// Panel 3: Loss Surface (contour plot)
+// ============================================================
+let surfModel, surfTrail, surfTimer;
+
+function computeLoss(w, b) {
+  let loss = 0;
+  for (let i = 0; i < dataX.length; i++) {
+    loss += (w * dataX[i] + b - dataY[i]) ** 2;
+  }
+  return loss / (2 * dataX.length);
+}
+
+function resetSurf() {
+  if (surfTimer) { clearInterval(surfTimer); surfTimer = null; document.getElementById('surfAutoBtn').classList.remove('on'); }
+  generateData(0.8);
+  surfModel = new LinReg();
+  surfModel.w = -2; surfModel.b = -3; // Start far from optimum
+  surfTrail = [{ w: surfModel.w, b: surfModel.b }];
+  drawSurf();
+  showSurfCode();
+}
+
+function stepSurf(n) {
+  if (!surfModel) resetSurf();
+  const lr = +document.getElementById('surfLR').value;
+  for (let s = 0; s < n; s++) {
+    surfModel.trainStep(dataX, dataY, lr);
+    surfTrail.push({ w: surfModel.w, b: surfModel.b });
+    if (surfTrail.length > 500) break;
+  }
+  drawSurf();
+}
+
+function autoSurf() {
+  const btn = document.getElementById('surfAutoBtn');
+  if (surfTimer) { clearInterval(surfTimer); surfTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!surfModel) resetSurf();
+  surfTimer = setInterval(() => {
+    stepSurf(1);
+    if (surfTrail.length > 300) { clearInterval(surfTimer); surfTimer = null; btn.classList.remove('on'); }
+  }, 60);
+}
+
+function drawSurf() {
+  const { ctx, W, H } = getCtx('surfCanvas');
+  const pad = { l: 50, r: 20, t: 40, b: 45 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+
+  const wMin = -4, wMax = 6, bMin = -5, bMax = 5;
+  function tx(w) { return pad.l + (w - wMin) / (wMax - wMin) * pw; }
+  function ty(b) { return pad.t + (1 - (b - bMin) / (bMax - bMin)) * ph; }
+
+  // Contour plot
+  const step = 4;
+  const levels = [0.2, 0.5, 1, 2, 4, 8, 15, 30, 60];
+  const grid = [];
+  for (let px = 0; px < pw; px += step) {
+    for (let py = 0; py < ph; py += step) {
+      const w = wMin + (px / pw) * (wMax - wMin);
+      const b = bMax - (py / ph) * (bMax - bMin);
+      const l = computeLoss(w, b);
+      grid.push({ px: pad.l + px, py: pad.t + py, l });
+    }
+  }
+
+  // Color contours
+  grid.forEach(({ px, py, l }) => {
+    let li = 0;
+    for (let i = 0; i < levels.length; i++) { if (l > levels[i]) li = i + 1; }
+    const t = li / levels.length;
+    const r = Math.floor(13 + t * 60);
+    const g = Math.floor(27 + (1 - t) * 40);
+    const bl = Math.floor(46 + (1 - t) * 50);
+    ctx.fillStyle = `rgb(${r},${g},${bl})`;
+    ctx.fillRect(px, py, step, step);
+  });
+
+  // Contour lines
+  levels.forEach((level, li) => {
+    ctx.strokeStyle = `rgba(255,255,255,${0.05 + li * 0.02})`;
+    ctx.lineWidth = 0.5;
+    // Simple: draw boundary between adjacent cells
+    for (let px = 0; px < pw - step; px += step) {
+      for (let py = 0; py < ph - step; py += step) {
+        const w1 = wMin + (px / pw) * (wMax - wMin);
+        const b1 = bMax - (py / ph) * (bMax - bMin);
+        const w2 = wMin + ((px + step) / pw) * (wMax - wMin);
+        const b2 = bMax - ((py + step) / ph) * (bMax - bMin);
+        const l1 = computeLoss(w1, b1);
+        const l2 = computeLoss(w2, b1);
+        const l3 = computeLoss(w1, b2);
+        if ((l1 < level) !== (l2 < level)) {
+          ctx.beginPath();
+          ctx.moveTo(pad.l + px + step, pad.t + py);
+          ctx.lineTo(pad.l + px + step, pad.t + py + step);
+          ctx.stroke();
+        }
+        if ((l1 < level) !== (l3 < level)) {
+          ctx.beginPath();
+          ctx.moveTo(pad.l + px, pad.t + py + step);
+          ctx.lineTo(pad.l + px + step, pad.t + py + step);
+          ctx.stroke();
+        }
+      }
+    }
+  });
+
+  // Optimal point
+  // Use normal equation
+  let sxx = 0, sxy = 0, sx = 0, sy = 0;
+  for (let i = 0; i < dataX.length; i++) {
+    sxx += dataX[i] * dataX[i]; sxy += dataX[i] * dataY[i];
+    sx += dataX[i]; sy += dataY[i];
+  }
+  const N = dataX.length;
+  const optW = (N * sxy - sx * sy) / (N * sxx - sx * sx);
+  const optB = (sy - optW * sx) / N;
+  ctx.beginPath();
+  ctx.arc(tx(optW), ty(optB), 6, 0, Math.PI * 2);
+  ctx.strokeStyle = '#66bb6a'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#66bb6a'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`最优 (${optW.toFixed(1)}, ${optB.toFixed(1)})`, tx(optW) + 10, ty(optB) - 4);
+
+  // Gradient descent trail
+  if (surfTrail.length > 1) {
+    ctx.strokeStyle = '#e94560'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    surfTrail.forEach((pt, i) => {
+      const x = tx(pt.w), y = ty(pt.b);
+      if (x < pad.l || x > W - pad.r || y < pad.t || y > H - pad.b) return;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Trail dots
+    surfTrail.forEach((pt, i) => {
+      if (i % Math.max(1, Math.floor(surfTrail.length / 30)) !== 0 && i !== surfTrail.length - 1) return;
+      const x = tx(pt.w), y = ty(pt.b);
+      if (x < pad.l || x > W - pad.r || y < pad.t || y > H - pad.b) return;
+      ctx.beginPath();
+      ctx.arc(x, y, i === surfTrail.length - 1 ? 5 : 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = i === surfTrail.length - 1 ? '#e94560' : '#e9456088';
+      ctx.fill();
+    });
+  }
+
+  // Start point
+  ctx.beginPath();
+  ctx.arc(tx(surfTrail[0].w), ty(surfTrail[0].b), 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffd54f'; ctx.fill();
+  ctx.fillStyle = '#ffd54f'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+  ctx.fillText('起点', tx(surfTrail[0].w) - 6, ty(surfTrail[0].b) + 3);
+
+  // Axes
+  ctx.fillStyle = '#888'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Loss 等高线 — 梯度下降轨迹', W / 2, 20);
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace';
+  ctx.fillText('w', (pad.l + W - pad.r) / 2, H - 10);
+  ctx.save(); ctx.translate(14, (pad.t + H - pad.b) / 2); ctx.rotate(-Math.PI / 2);
+  ctx.fillText('b', 0, 0); ctx.restore();
+
+  // Axis ticks
+  ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  for (let w = -3; w <= 5; w += 2) ctx.fillText(w, tx(w), H - pad.b + 14);
+  ctx.textAlign = 'right';
+  for (let b = -4; b <= 4; b += 2) ctx.fillText(b, pad.l - 6, ty(b) + 3);
+
+  // Info
+  const cur = surfTrail[surfTrail.length - 1];
+  const curLoss = computeLoss(cur.w, cur.b);
+  const lr = document.getElementById('surfLR').value;
+  document.getElementById('surfInfo').innerHTML =
+    `<b>lr=${lr}</b> | Step ${surfTrail.length - 1} | ` +
+    `w=${cur.w.toFixed(3)}, b=${cur.b.toFixed(3)} | loss=${curLoss.toFixed(4)}<br>` +
+    `<span style="color:#ffd54f">黄点</span>=起点 | <span class="c-red">红线</span>=梯度下降���径 | <span class="c-green">绿圈</span>=最优解<br>` +
+    `试试不同 lr: 0.001 走小步、0.01 稳定、0.15 来回震荡`;
+}
+
+function showSurfCode() {
+  document.getElementById('surfCode').innerHTML = `<span class="comment"># 梯度下降在 2D 参数空间的轨迹</span>
+<span class="comment">#</span>
+<span class="comment"># 等高线 = 相同 loss 的 (w, b) 组合</span>
+<span class="comment"># 梯度方向 = 垂直于等高线</span>
+<span class="comment"># 每步沿负梯度走一步</span>
+
+<span class="comment"># 解析解 (直接跳到最优):</span>
+<span class="kw">def</span> <span class="fn">normal_equation</span>(X, y):
+<span class="hl">    X_aug = np.hstack([X, np.ones((N,1))])
+    w = np.linalg.solve(
+        X_aug.T @ X_aug,
+        X_aug.T @ y
+    )</span>
+    <span class="kw">return</span> w
+
+<span class="comment"># 梯度下降 vs 解析解:</span>
+<span class="comment"># 解析解: O(D³), 精确</span>
+<span class="comment"># 梯度下降: O(ND), 迭代近似</span>
+<span class="comment"># D 大时梯度下降更快</span>
+<span class="comment"># 非线性模型只能用梯度下降</span>`;
+}
+
+// ============================================================
+// Init
+// ============================================================
+resetLR();
+</script>
+</body>
+</html>

@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BPE Tokenizer — 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:960px;margin:0 auto}
+  .panel.active{display:block}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  /* Token display */
+  .token-area{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:16px;margin-top:12px;min-height:60px;display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .token{display:inline-block;padding:4px 8px;border-radius:4px;font-size:.85em;border:1px solid}
+  .merge-log{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;margin-top:10px;max-height:200px;overflow-y:auto;font-size:.78em;line-height:1.8}
+  .merge-entry{padding:2px 0;border-bottom:1px solid #0f346033}
+  .merge-entry.active{background:#e9456022;border-radius:4px;padding:2px 6px}
+
+  .vocab-area{display:flex;flex-wrap:wrap;gap:4px;margin-top:10px;max-height:150px;overflow-y:auto;padding:8px;background:#0d1b2a;border:1px solid #0f3460;border-radius:8px}
+  .vocab-item{padding:3px 8px;border-radius:4px;font-size:.75em;background:#16213e;border:1px solid #0f3460;color:#aaa}
+  .vocab-item.new{background:#e9456033;border-color:#e94560;color:#e94560}
+
+  /* Comparison table */
+  .cmp{width:100%;border-collapse:collapse;font-size:.82em;margin-top:12px}
+  .cmp th,.cmp td{padding:10px 12px;border:1px solid #0f3460;text-align:center}
+  .cmp th{background:#0f3460;color:#fff}
+  .cmp td{background:#16213e}
+</style>
+</head>
+<body>
+
+<h1>BPE Tokenizer</h1>
+<p class="subtitle">Byte Pair Encoding — 逐步合并可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">合并过程</button>
+  <button class="tab-btn" onclick="switchTab(1)">编码演示</button>
+  <button class="tab-btn" onclick="switchTab(2)">BPE vs BBPE</button>
+  <button class="tab-btn" onclick="switchTab(3)">tiktoken 改进</button>
+</div>
+
+<!-- ============== Panel 1: Merge Process ============== -->
+<div class="panel active" id="panel-0">
+  <div class="controls" style="margin-bottom:10px">
+    <label style="font-size:.8em;color:#888">语料:</label>
+    <select id="corpusSelect" onchange="resetMerge()" style="padding:6px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;border-radius:5px;">
+      <option value="low low low low lower lower newest newest newest newest widest widest widest">low/lower/newest/widest</option>
+      <option value="the cat sat on the mat the cat sat the cat the dog">the cat sat on the mat</option>
+      <option value="aaabdaaabac">aaabdaaabac (经典示例)</option>
+    </select>
+  </div>
+
+  <div style="font-size:.8em;color:#888;margin-bottom:4px">当前词表状态 (每个词的 symbol 序列):</div>
+  <div class="token-area" id="tokenDisplay"></div>
+
+  <div style="display:flex;gap:12px;margin-top:12px">
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">Merge 日志:</div>
+      <div class="merge-log" id="mergeLog"></div>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">Vocab (<span id="vocabCount">0</span> tokens):</div>
+      <div class="vocab-area" id="vocabDisplay"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button onclick="resetMerge()">重置</button>
+    <button onclick="stepMerge()">下一步 Merge</button>
+    <button onclick="autoMerge()">自动合并 (全部)</button>
+  </div>
+  <div class="info-box" id="mergeInfo">点击「下一步 Merge」开始。每一步找到最高频的相邻 pair 并合并。</div>
+</div>
+
+<!-- ============== Panel 2: Encode Demo ============== -->
+<div class="panel" id="panel-1">
+  <div class="controls" style="margin-bottom:10px">
+    <label style="font-size:.8em;color:#888">输入文本:</label>
+    <input type="text" id="encodeInput" value="low newest widest" style="width:300px;padding:6px 10px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;border-radius:5px;">
+    <button onclick="runEncode()">编码</button>
+  </div>
+  <div style="font-size:.8em;color:#888;margin-bottom:4px">编码过程 (按 merge 顺序逐步合并):</div>
+  <div id="encodeSteps" style="background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;min-height:100px;font-size:.82em;line-height:2"></div>
+  <div style="font-size:.8em;color:#888;margin-top:10px;margin-bottom:4px">最终 tokens:</div>
+  <div class="token-area" id="encodeFinal"></div>
+  <div class="info-box" id="encodeInfo"></div>
+</div>
+
+<!-- ============== Panel 3: BPE vs BBPE ============== -->
+<div class="panel" id="panel-2">
+  <table class="cmp">
+    <tr><th></th><th class="c-blue">BPE (字符级)</th><th class="c-red">BBPE (字节级)</th></tr>
+    <tr><td>初始 vocab</td><td>训练语料中所有 Unicode 字符</td><td>固定 256 个字节 (0x00~0xFF)</td></tr>
+    <tr><td>输入单位</td><td>字符</td><td>UTF-8 字节</td></tr>
+    <tr><td>OOV 风险</td><td style="color:#e94560">有 (没见过的字符 → &lt;UNK&gt;)</td><td style="color:#66bb6a">无 (所有字节都在 vocab)</td></tr>
+    <tr><td>处理 "猫"</td><td>1 个字符 token (如果见过)</td><td>3 个字节: E7 8C AB</td></tr>
+    <tr><td>处理 Emoji 🎉</td><td>可能 OOV</td><td>4 个字节: F0 9F 8E 89</td></tr>
+    <tr><td>vocab 大小确定性</td><td>不确定 (取决于语料)</td><td>确定: 256 + num_merges</td></tr>
+    <tr><td>代表实现</td><td>原始 BPE (Sennrich 2016)</td><td>GPT-2, tiktoken, Llama</td></tr>
+  </table>
+
+  <div style="margin-top:16px;font-size:.82em;color:#888">UTF-8 编码演示:</div>
+  <div class="controls" style="margin-bottom:6px">
+    <input type="text" id="utf8Input" value="Hello 你好 🎉" style="width:250px;padding:6px 10px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;border-radius:5px;">
+    <button onclick="showUtf8()">查看 UTF-8 字节</button>
+  </div>
+  <div class="token-area" id="utf8Display"></div>
+  <div class="info-box" id="bbpeInfo">
+    <b>BBPE 的核心优势:</b> 任何文本都能被编码为 UTF-8 字节序列，而所有 256 个字节天然在 vocab 中。<br>
+    所以 <span class="c-green">BBPE 永远不会遇到 OOV</span>——最差情况就是每个字节一个 token，不会产生 &lt;UNK&gt;。
+  </div>
+</div>
+
+<!-- ============== Panel 4: tiktoken Improvements ============== -->
+<div class="panel" id="panel-3">
+  <div style="font-size:.82em;color:#888;margin-bottom:8px">tiktoken 的核心改进：用 <span class="c-red">正则预分词</span> 防止跨边界合并</div>
+
+  <div class="controls" style="margin-bottom:10px">
+    <label style="font-size:.8em;color:#888">输入文本:</label>
+    <input type="text" id="tiktokenInput" value="Hello world! I'm learning 你好世界 123" style="width:380px;padding:6px 10px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;border-radius:5px;">
+    <button onclick="runTiktoken()">预分词对比</button>
+  </div>
+
+  <div style="display:flex;gap:14px">
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">朴素 BBPE (无预分词):</div>
+      <div class="token-area" id="naiveTokens" style="min-height:48px"></div>
+      <div style="font-size:.75em;color:#555;margin-top:4px" id="naiveNote"></div>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">tiktoken (正则预分词后):</div>
+      <div class="token-area" id="tiktokenTokens" style="min-height:48px"></div>
+      <div style="font-size:.75em;color:#555;margin-top:4px" id="tiktokenNote"></div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px;font-size:.82em;color:#888">GPT-4 使用的正则模式 (简化展示):</div>
+  <div style="background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;margin-top:6px;font-size:.78em;line-height:1.9;overflow-x:auto;white-space:pre-wrap;color:#ccc" id="regexDisplay"></div>
+
+  <div style="margin-top:14px;font-size:.82em;color:#888;margin-bottom:4px">正则预分词规则解析:</div>
+  <div style="background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;font-size:.78em;line-height:1.9" id="regexRules"></div>
+
+  <table class="cmp" style="margin-top:14px">
+    <tr><th></th><th class="c-blue">朴素 BBPE</th><th class="c-red">tiktoken (BBPE + regex)</th></tr>
+    <tr><td>预分词</td><td>无，整个文本一起做 BPE</td><td>先用正则切成 chunk，每个 chunk 内部做 BPE</td></tr>
+    <tr><td>"Hello world"</td><td style="color:#e94560">可能合并成 "o w" → 跨词 token</td><td style="color:#66bb6a">"Hello" 和 " world" 分开，不会跨词合并</td></tr>
+    <tr><td>空格处理</td><td>空格和字母可能被合并</td><td>空格归入下一个词的前缀 (" world")</td></tr>
+    <tr><td>数字</td><td>"12345" 可能是一个 token</td><td>数字最多 3 位一组 ("123" + "45")</td></tr>
+    <tr><td>特殊 token</td><td>无特殊处理</td><td>&lt;|endoftext|&gt; 等精确匹配，不参与 BPE</td></tr>
+    <tr><td>实现语言</td><td>Python</td><td>Rust (性能比 Python 快 3-10x)</td></tr>
+    <tr><td>代���</td><td>原始 BBPE 论文</td><td>GPT-2/3/4, cl100k_base, o200k_base</td></tr>
+  </table>
+
+  <div class="info-box" id="tiktokenInfo">
+    <b>tiktoken 的核心思想:</b> BPE 的 merge 规则是"贪心合并最频繁的相邻 pair"。<br>
+    如果不做预分词，<span class="c-red">空格和字母</span>、<span class="c-red">标点和单词</span>、<span class="c-red">数字和字母</span>都可能被合并成一个 token，导致 vocab 中充满无意义的跨边界 token。<br>
+    <span class="c-green">正则预分词</span>通过在 BPE 之前把文本切成语言学上合理的 chunk，确保 merge 只在 chunk 内部发生。
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Tab switching
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j)=>p.classList.toggle('active',i===j));
+  tabBtns.forEach((b,j)=>b.classList.toggle('active',i===j));
+}
+
+// ============================================================
+// BPE Engine (reusable)
+// ============================================================
+const COLORS = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a','#7e57c2','#8d6e63','#78909c','#d4e157'];
+
+class BPEEngine {
+  constructor(corpus) {
+    this.corpus = corpus;
+    this.merges = [];
+    this.mergeColors = {};
+    this.reset();
+  }
+
+  reset() {
+    const words = this.corpus.split(/\s+/);
+    const freqs = {};
+    words.forEach(w => { freqs[w] = (freqs[w]||0) + 1; });
+
+    this.splits = {};
+    for (const [w, f] of Object.entries(freqs)) {
+      this.splits[JSON.stringify([...w, '</w>'])] = f;
+    }
+    this.merges = [];
+    this.mergeColors = {};
+    this.buildVocab();
+  }
+
+  buildVocab() {
+    this.vocab = new Set();
+    for (const key of Object.keys(this.splits)) {
+      JSON.parse(key).forEach(s => this.vocab.add(s));
+    }
+    for (const [,tok] of this.merges) this.vocab.add(tok);
+  }
+
+  step() {
+    // Count pairs
+    const pairFreqs = {};
+    for (const [key, freq] of Object.entries(this.splits)) {
+      const syms = JSON.parse(key);
+      for (let i = 0; i < syms.length - 1; i++) {
+        const p = syms[i] + '|||' + syms[i+1];
+        pairFreqs[p] = (pairFreqs[p]||0) + freq;
+      }
+    }
+
+    if (Object.keys(pairFreqs).length === 0) return null;
+
+    // Best pair
+    let bestPair = null, bestFreq = 0;
+    for (const [p, f] of Object.entries(pairFreqs)) {
+      if (f > bestFreq) { bestFreq = f; bestPair = p; }
+    }
+
+    const [a, b] = bestPair.split('|||');
+    const newTok = a + b;
+    const color = COLORS[this.merges.length % COLORS.length];
+    this.merges.push([a, b, newTok, bestFreq]);
+    this.mergeColors[newTok] = color;
+
+    // Apply merge
+    const newSplits = {};
+    for (const [key, freq] of Object.entries(this.splits)) {
+      const syms = JSON.parse(key);
+      const merged = [];
+      let i = 0;
+      while (i < syms.length) {
+        if (i < syms.length - 1 && syms[i] === a && syms[i+1] === b) {
+          merged.push(newTok);
+          i += 2;
+        } else {
+          merged.push(syms[i]);
+          i++;
+        }
+      }
+      newSplits[JSON.stringify(merged)] = freq;
+    }
+    this.splits = newSplits;
+    this.buildVocab();
+
+    return { a, b, newTok, freq: bestFreq, color };
+  }
+
+  encode(text) {
+    const results = [];
+    for (const word of text.split(/\s+/)) {
+      let syms = [...word, '</w>'];
+      const steps = [syms.slice()];
+      for (const [a, b, newTok] of this.merges) {
+        const merged = [];
+        let i = 0;
+        while (i < syms.length) {
+          if (i < syms.length - 1 && syms[i] === a && syms[i+1] === b) {
+            merged.push(newTok);
+            i += 2;
+          } else {
+            merged.push(syms[i]);
+            i++;
+          }
+        }
+        if (merged.length !== syms.length) {
+          syms = merged;
+          steps.push(syms.slice());
+        }
+      }
+      results.push({ word, steps, final: syms });
+    }
+    return results;
+  }
+}
+
+// ============================================================
+// Panel 1: Merge Process
+// ============================================================
+let engine;
+
+function resetMerge() {
+  const corpus = document.getElementById('corpusSelect').value;
+  engine = new BPEEngine(corpus);
+  renderState();
+  document.getElementById('mergeLog').innerHTML = '';
+  document.getElementById('mergeInfo').textContent = '点击「下一步 Merge」开始。每一步找到最高频的相邻 pair 并合并。';
+}
+
+function stepMerge() {
+  if (!engine) resetMerge();
+  const result = engine.step();
+  if (!result) {
+    document.getElementById('mergeInfo').textContent = '没有更多可合并的 pair 了！';
+    return;
+  }
+  renderState();
+  // Add to log
+  const log = document.getElementById('mergeLog');
+  const n = engine.merges.length;
+  log.innerHTML += `<div class="merge-entry active" style="border-left:3px solid ${result.color};padding-left:8px">` +
+    `#${n}: <span style="color:${result.color}">'${esc(result.a)}'</span> + ` +
+    `<span style="color:${result.color}">'${esc(result.b)}'</span> → ` +
+    `<b style="color:${result.color}">'${esc(result.newTok)}'</b> (freq=${result.freq})</div>`;
+  log.scrollTop = log.scrollHeight;
+
+  // Deactivate previous
+  log.querySelectorAll('.active').forEach((el,i,all) => {
+    if (i < all.length - 1) el.classList.remove('active');
+  });
+
+  document.getElementById('mergeInfo').innerHTML =
+    `Merge #${n}: 合并 <span style="color:${result.color}">'${esc(result.a)}' + '${esc(result.b)}'</span> → ` +
+    `<b style="color:${result.color}">'${esc(result.newTok)}'</b> (出现 ${result.freq} 次)。` +
+    `当前 vocab: ${engine.vocab.size} tokens。`;
+}
+
+function autoMerge() {
+  if (!engine) resetMerge();
+  for (let i = 0; i < 20; i++) {
+    if (!engine.step()) break;
+  }
+  // Rebuild log
+  const log = document.getElementById('mergeLog');
+  log.innerHTML = '';
+  engine.merges.forEach(([a,b,tok,freq], i) => {
+    const color = engine.mergeColors[tok] || '#888';
+    log.innerHTML += `<div class="merge-entry" style="border-left:3px solid ${color};padding-left:8px">` +
+      `#${i+1}: '${esc(a)}' + '${esc(b)}' → <b style="color:${color}">'${esc(tok)}'</b> (freq=${freq})</div>`;
+  });
+  renderState();
+  document.getElementById('mergeInfo').textContent = `完成 ${engine.merges.length} 次合并。Vocab: ${engine.vocab.size} tokens。`;
+}
+
+function renderState() {
+  // Token display
+  const area = document.getElementById('tokenDisplay');
+  area.innerHTML = '';
+  for (const [key, freq] of Object.entries(engine.splits)) {
+    const syms = JSON.parse(key);
+    const wordDiv = document.createElement('div');
+    wordDiv.style.cssText = 'display:flex;gap:2px;align-items:center;margin:4px 8px 4px 0;';
+
+    syms.forEach(s => {
+      const span = document.createElement('span');
+      span.className = 'token';
+      const color = engine.mergeColors[s] || '#555';
+      span.style.borderColor = color;
+      span.style.color = color;
+      span.textContent = s;
+      wordDiv.appendChild(span);
+    });
+
+    const freqSpan = document.createElement('span');
+    freqSpan.style.cssText = 'font-size:.7em;color:#555;margin-left:2px';
+    freqSpan.textContent = `×${freq}`;
+    wordDiv.appendChild(freqSpan);
+    area.appendChild(wordDiv);
+  }
+
+  // Vocab display
+  const vocabArea = document.getElementById('vocabDisplay');
+  vocabArea.innerHTML = '';
+  const sorted = [...engine.vocab].sort((a,b) => a.length - b.length || a.localeCompare(b));
+  sorted.forEach(tok => {
+    const span = document.createElement('span');
+    span.className = 'vocab-item' + (engine.mergeColors[tok] ? ' new' : '');
+    if (engine.mergeColors[tok]) span.style.borderColor = engine.mergeColors[tok];
+    span.textContent = tok;
+    vocabArea.appendChild(span);
+  });
+  document.getElementById('vocabCount').textContent = engine.vocab.size;
+}
+
+function esc(s) { return s.replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ============================================================
+// Panel 2: Encode Demo
+// ============================================================
+function runEncode() {
+  if (!engine || engine.merges.length === 0) {
+    resetMerge();
+    for (let i = 0; i < 15; i++) engine.step();
+  }
+
+  const text = document.getElementById('encodeInput').value;
+  const results = engine.encode(text);
+
+  const stepsDiv = document.getElementById('encodeSteps');
+  stepsDiv.innerHTML = '';
+
+  results.forEach(({word, steps, final}) => {
+    const wordLabel = document.createElement('div');
+    wordLabel.style.cssText = 'color:#888;font-size:.75em;margin-top:6px';
+    wordLabel.textContent = `"${word}":`;
+    stepsDiv.appendChild(wordLabel);
+
+    steps.forEach((syms, si) => {
+      const line = document.createElement('div');
+      line.style.cssText = 'display:flex;gap:3px;align-items:center;margin-left:16px';
+
+      const arrow = document.createElement('span');
+      arrow.style.cssText = 'color:#555;font-size:.8em;min-width:20px';
+      arrow.textContent = si === 0 ? '  ' : '→';
+      line.appendChild(arrow);
+
+      syms.forEach(s => {
+        const span = document.createElement('span');
+        span.className = 'token';
+        const color = engine.mergeColors[s] || '#555';
+        span.style.borderColor = color;
+        span.style.color = color;
+        span.style.fontSize = '.8em';
+        span.textContent = s;
+        line.appendChild(span);
+      });
+      stepsDiv.appendChild(line);
+    });
+  });
+
+  // Final tokens
+  const finalDiv = document.getElementById('encodeFinal');
+  finalDiv.innerHTML = '';
+  results.forEach(({final}) => {
+    final.forEach(s => {
+      const span = document.createElement('span');
+      span.className = 'token';
+      const color = engine.mergeColors[s] || '#555';
+      span.style.borderColor = color;
+      span.style.color = color;
+      span.textContent = s;
+      finalDiv.appendChild(span);
+    });
+  });
+
+  const totalTokens = results.reduce((a, r) => a + r.final.length, 0);
+  const totalChars = text.replace(/\s/g,'').length + results.length; // +</w> per word
+  document.getElementById('encodeInfo').innerHTML =
+    `输入 "${text}" → <span class="c-red">${totalTokens} tokens</span>。` +
+    `原始字符数: ${text.length}，压缩比: ${(totalTokens/text.length*100).toFixed(0)}%`;
+}
+
+// ============================================================
+// Panel 3: UTF-8 display
+// ============================================================
+function showUtf8() {
+  const text = document.getElementById('utf8Input').value;
+  const area = document.getElementById('utf8Display');
+  area.innerHTML = '';
+
+  for (const char of text) {
+    const bytes = new TextEncoder().encode(char);
+    const charDiv = document.createElement('div');
+    charDiv.style.cssText = 'display:flex;flex-direction:column;align-items:center;margin:4px 6px;';
+
+    // Character label
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:.9em;margin-bottom:4px;color:#ccc';
+    label.textContent = char === ' ' ? '(space)' : char;
+    charDiv.appendChild(label);
+
+    // Bytes
+    const bytesDiv = document.createElement('div');
+    bytesDiv.style.cssText = 'display:flex;gap:2px';
+    bytes.forEach(b => {
+      const span = document.createElement('span');
+      span.className = 'token';
+      const color = bytes.length === 1 ? '#66bb6a' : bytes.length === 2 ? '#4fc3f7' : bytes.length === 3 ? '#ffd54f' : '#e94560';
+      span.style.borderColor = color;
+      span.style.color = color;
+      span.style.fontSize = '.75em';
+      span.textContent = '0x' + b.toString(16).toUpperCase().padStart(2,'0');
+      bytesDiv.appendChild(span);
+    });
+    charDiv.appendChild(bytesDiv);
+
+    // Byte count
+    const countLabel = document.createElement('div');
+    countLabel.style.cssText = 'font-size:.65em;color:#555;margin-top:2px';
+    countLabel.textContent = `${bytes.length}B`;
+    charDiv.appendChild(countLabel);
+
+    area.appendChild(charDiv);
+  }
+
+  const totalBytes = new TextEncoder().encode(text).length;
+  document.getElementById('bbpeInfo').innerHTML =
+    `<b>"${text}"</b>: ${text.length} 个字符 → ${totalBytes} 个 UTF-8 字节<br>` +
+    `<span style="color:#66bb6a">ASCII (1B)</span> | ` +
+    `<span style="color:#4fc3f7">2B 字符</span> | ` +
+    `<span style="color:#ffd54f">3B 字符 (中文)</span> | ` +
+    `<span style="color:#e94560">4B 字符 (Emoji)</span><br>` +
+    `BBPE 的初始 vocab 就是这 256 个字节值，所以<b>任何文本都能被表示，零 OOV</b>。`;
+}
+
+// ============================================================
+// Panel 4: tiktoken — regex pre-tokenization demo
+// ============================================================
+
+// Simplified GPT-4 regex pattern (cl100k_base style)
+// The real pattern is more complex, but this captures the key ideas
+const TIKTOKEN_RULES = [
+  { name: "缩写", pattern: /'(?:s|t|re|ve|m|ll|d)\b/gi, color: '#ab47bc', desc: "'s, 't, 're 等缩写单独切出" },
+  { name: "字母词(带前缀空格)", pattern: / ?[a-zA-Z]+/g, color: '#4fc3f7', desc: "英文单词，空格归入词的前缀" },
+  { name: "数字(最多3位)", pattern: / ?[0-9]{1,3}/g, color: '#66bb6a', desc: "数字最多 3 位一组，防止长数字变一个 token" },
+  { name: "非字母非数字", pattern: / ?[^\sa-zA-Z0-9]+/g, color: '#ffd54f', desc: "标点符号等，单独一组" },
+  { name: "空白符", pattern: /\s+/g, color: '#78909c', desc: "连续空白符" },
+];
+
+// Combined regex that mimics tiktoken pre-tokenization
+const TIKTOKEN_REGEX = /'(?:s|t|re|ve|m|ll|d)\b| ?[\p{L}]+| ?[\p{N}]{1,3}| ?[^\s\p{L}\p{N}]+|\s+/gu;
+
+function runTiktoken() {
+  const text = document.getElementById('tiktokenInput').value;
+  if (!text) return;
+
+  // --- Naive: just split into UTF-8 bytes (no pre-tokenization) ---
+  const naiveDiv = document.getElementById('naiveTokens');
+  naiveDiv.innerHTML = '';
+  // Show the whole text as one chunk (naive BBPE processes it all together)
+  const naiveChunk = document.createElement('div');
+  naiveChunk.style.cssText = 'display:flex;flex-wrap:wrap;gap:2px;align-items:center';
+  const bytes = new TextEncoder().encode(text);
+  // Group consecutive bytes into visual clusters by character
+  for (const char of text) {
+    const charBytes = new TextEncoder().encode(char);
+    const span = document.createElement('span');
+    span.className = 'token';
+    span.style.borderColor = '#555';
+    span.style.color = '#888';
+    span.style.fontSize = '.8em';
+    span.textContent = char === ' ' ? '\u2423' : char;
+    naiveChunk.appendChild(span);
+  }
+  naiveDiv.appendChild(naiveChunk);
+  document.getElementById('naiveNote').textContent =
+    `整个文本 (${bytes.length} 字节) 作为一个序列做 BPE → 任意相邻字节都可能被合并`;
+
+  // --- tiktoken: regex pre-tokenization ---
+  const tiktokenDiv = document.getElementById('tiktokenTokens');
+  tiktokenDiv.innerHTML = '';
+  const chunks = text.match(TIKTOKEN_REGEX) || [];
+
+  const chunkColors = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a'];
+  chunks.forEach((chunk, ci) => {
+    const span = document.createElement('span');
+    span.className = 'token';
+    const color = chunkColors[ci % chunkColors.length];
+    span.style.borderColor = color;
+    span.style.color = color;
+    span.style.fontSize = '.8em';
+    // Make spaces visible
+    span.textContent = chunk.replace(/ /g, '\u2423');
+    tiktokenDiv.appendChild(span);
+  });
+  document.getElementById('tiktokenNote').textContent =
+    `正则切成 ${chunks.length} 个 chunk → 每个 chunk 内部独立做 BPE，不会跨 chunk 合并`;
+
+  // --- Show regex pattern ---
+  document.getElementById('regexDisplay').innerHTML =
+    `<span style="color:#e94560">GPT-4 (cl100k_base) 简化版:</span>\n` +
+    `<span style="color:#4fc3f7">'(?:s|t|re|ve|m|ll|d)\\b</span>  <span style="color:#555">← 缩写</span>\n` +
+    `<span style="color:#4fc3f7"> ?[\\p{L}]+</span>               <span style="color:#555">← 字母词 (Unicode 全覆盖)</span>\n` +
+    `<span style="color:#66bb6a"> ?[\\p{N}]{1,3}</span>            <span style="color:#555">← 数字 (最多3位)</span>\n` +
+    `<span style="color:#ffd54f"> ?[^\\s\\p{L}\\p{N}]+</span>      <span style="color:#555">← 标点/符号</span>\n` +
+    `<span style="color:#78909c">\\s+</span>                       <span style="color:#555">← 空白符</span>`;
+
+  // --- Regex rules breakdown ---
+  const rulesDiv = document.getElementById('regexRules');
+  rulesDiv.innerHTML = '';
+  const examples = [
+    { input: "Hello world", naive: "H|e|l|l|o| |w|o|r|l|d → ' o' 'o w' 可能被合并", tiktoken: "'Hello' + ' world' → 空格归入下一个词" },
+    { input: "don't", naive: "d|o|n|'|t → 撇号可能和任意字母合并", tiktoken: "'don' + '\\'t' → 缩写单独处理" },
+    { input: "12345", naive: "1|2|3|4|5 → 可能合成一个 token", tiktoken: "'123' + '45' → 最多3位一组" },
+    { input: "Hello!!", naive: "H|e|l|l|o|!|! → '!' 可能和字母合并", tiktoken: "'Hello' + '!!' → 标点独立" },
+    { input: "你好world", naive: "全部字节混在一起", tiktoken: "'你好' + 'world' → Unicode 字母分组" },
+  ];
+  examples.forEach(ex => {
+    rulesDiv.innerHTML += `<div style="margin-bottom:6px">` +
+      `<span style="color:#ccc">"${ex.input}"</span>: ` +
+      `<span style="color:#e94560">朴素: ${ex.naive}</span> → ` +
+      `<span style="color:#66bb6a">tiktoken: ${ex.tiktoken}</span></div>`;
+  });
+}
+
+// ============================================================
+// Init
+// ============================================================
+resetMerge();
+showUtf8();
+runTiktoken();
+</script>
+</body>
+</html>

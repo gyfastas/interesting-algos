@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoRA — 低秩适配可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:960px;margin:0 auto}
+  .panel.active{display:block}
+  canvas{display:block;margin:0 auto}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls input[type=number]{width:70px;padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px;text-align:center}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+</style>
+</head>
+<body>
+
+<h1>LoRA 低秩适配</h1>
+<p class="subtitle">冻结大矩阵 + 两个小矩阵旁路 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">矩阵分解</button>
+  <button class="tab-btn" onclick="switchTab(1)">参数量对比</button>
+  <button class="tab-btn" onclick="switchTab(2)">Apply 流程</button>
+  <button class="tab-btn" onclick="switchTab(3)">α/r 原理</button>
+</div>
+
+<!-- ============== Panel 1: Matrix Decomposition ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="matCanvas" width="900" height="440"></canvas>
+  <div class="controls">
+    <label>d_in:</label><input type="number" id="cfgIn" value="4096" onchange="drawMat()">
+    <label>d_out:</label><input type="number" id="cfgOut" value="4096" onchange="drawMat()">
+    <label>rank:</label><input type="number" id="cfgR" value="8" onchange="drawMat()">
+  </div>
+  <div class="info-box" id="matInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Parameter Count ============== -->
+<div class="panel" id="panel-1">
+  <canvas id="paramCanvas" width="900" height="420"></canvas>
+  <div class="controls">
+    <label>rank:</label><input type="number" id="paramR" value="8" onchange="drawParam()">
+    <label>target modules:</label>
+    <button id="btnQV" class="on" onclick="setTarget('qv')">Q+V (2层)</button>
+    <button id="btnQKVO" onclick="setTarget('qkvo')">Q+K+V+O (4层)</button>
+    <button id="btnAll" onclick="setTarget('all')">全部 Linear (6层)</button>
+  </div>
+  <div class="info-box" id="paramInfo"></div>
+</div>
+
+<!-- ============== Panel 3: Apply Flow ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="flowCanvas" width="900" height="460"></canvas>
+  <div class="controls">
+    <button onclick="flowReset()">重置</button>
+    <button onclick="flowPrev()">上一步</button>
+    <button onclick="flowNext()">下一步</button>
+    <button id="flowAutoBtn" onclick="flowAuto()">自动播放</button>
+  </div>
+  <div class="info-box" id="flowInfo" style="text-align:center">点击「下一步」开始</div>
+</div>
+
+<!-- ============== Panel 4: α/r Scaling Principle ============== -->
+<div class="panel" id="panel-3">
+  <canvas id="scalingCanvas" width="900" height="440"></canvas>
+  <div class="controls">
+    <label>α:</label><input type="number" id="scAlpha" value="16" onchange="drawScaling()">
+    <label>d_in:</label><input type="number" id="scDim" value="4096" onchange="drawScaling()">
+    <button id="btnNoDiv" onclick="setScalingMode('none')">scaling = α (不除 r)</button>
+    <button id="btnDivR" class="on" onclick="setScalingMode('r')">scaling = α/r (LoRA)</button>
+    <button id="btnDivSqrt" onclick="setScalingMode('sqrt')">scaling = α/√r</button>
+  </div>
+  <div class="info-box" id="scalingInfo"></div>
+</div>
+
+<script>
+const DPR=Math.min(devicePixelRatio,2);
+const panels=document.querySelectorAll('.panel');
+const tabBtns=document.querySelectorAll('.tab-btn');
+function switchTab(i){panels.forEach((p,j)=>p.classList.toggle('active',i===j));tabBtns.forEach((b,j)=>b.classList.toggle('active',i===j));if(i===0)drawMat();if(i===1)drawParam();if(i===2){flowStep=-1;drawFlow();}if(i===3)drawScaling();}
+function setupCanvas(id,w,h){const c=document.getElementById(id);c.width=w*DPR;c.height=h*DPR;c.style.width=w+'px';c.style.height=h+'px';const ctx=c.getContext('2d');ctx.scale(DPR,DPR);return ctx;}
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke){
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke();}
+}
+
+// ============================================================
+// Panel 1: Matrix Decomposition Visualization
+// ============================================================
+function drawMat(){
+  const W=900,H=440;
+  const ctx=setupCanvas('matCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const dIn=+document.getElementById('cfgIn').value||4096;
+  const dOut=+document.getElementById('cfgOut').value||4096;
+  const r=+document.getElementById('cfgR').value||8;
+
+  // Scale matrices to fit
+  const maxDim=Math.max(dIn,dOut);
+  const scale=160/maxDim;
+  const wW=dIn*scale, hW=dOut*scale;
+  const wA=dIn*scale, hA=r*scale;
+  const wB=r*scale, hB=dOut*scale;
+
+  // Ensure minimum visible size for small r
+  const minH=8;
+  const hA_vis=Math.max(hA,minH);
+  const wB_vis=Math.max(wB,minH);
+
+  const cx=W/2, topY=60;
+
+  // Title
+  ctx.fillStyle='#888';ctx.font='bold 14px monospace';ctx.textAlign='center';
+  ctx.fillText('y = W·x + (α/r) · B·A·x',cx,30);
+
+  // W matrix (frozen, big)
+  const wX=80, wY=topY+40;
+  roundRect(ctx,wX,wY,wW,hW,4,'#16213e','#555');
+  ctx.fillStyle='#888';ctx.font='bold 12px monospace';ctx.textAlign='center';
+  ctx.fillText('W (frozen)',wX+wW/2,wY+hW/2+4);
+  ctx.fillStyle='#555';ctx.font='10px monospace';
+  ctx.fillText(`${dOut}×${dIn}`,wX+wW/2,wY+hW/2+18);
+  // lock icon
+  ctx.fillStyle='#555';ctx.font='16px monospace';
+  ctx.fillText('🔒',wX+wW/2,wY-8);
+  // dim labels
+  ctx.fillStyle='#555';ctx.font='9px monospace';ctx.textAlign='center';
+  ctx.fillText(`d_in=${dIn}`,wX+wW/2,wY+hW+16);
+  ctx.textAlign='right';
+  ctx.fillText(`d_out=${dOut}`,wX-8,wY+hW/2+4);
+
+  // + sign
+  const plusX=wX+wW+30;
+  ctx.fillStyle='#e94560';ctx.font='bold 24px monospace';ctx.textAlign='center';
+  ctx.fillText('+',plusX,wY+hW/2+8);
+
+  // LoRA: B × A
+  const loraX=plusX+40;
+  const bX=loraX, bY=wY;
+  const aX=loraX+wB_vis+20, aY=wY+hW/2-hA_vis/2;
+
+  // B matrix
+  roundRect(ctx,bX,bY,wB_vis,hW,4,'#e9456033','#e94560');
+  ctx.fillStyle='#e94560';ctx.font='bold 11px monospace';ctx.textAlign='center';
+  ctx.fillText('B',bX+wB_vis/2,bY+hW/2-6);
+  ctx.font='9px monospace';
+  ctx.fillText(`${dOut}×${r}`,bX+wB_vis/2,bY+hW/2+8);
+  ctx.fillText('零初始化',bX+wB_vis/2,bY+hW/2+20);
+
+  // × sign
+  ctx.fillStyle='#888';ctx.font='14px monospace';
+  ctx.fillText('×',bX+wB_vis+10,bY+hW/2+4);
+
+  // A matrix
+  roundRect(ctx,aX,aY,wA,hA_vis,4,'#4fc3f733','#4fc3f7');
+  ctx.fillStyle='#4fc3f7';ctx.font='bold 11px monospace';ctx.textAlign='center';
+  ctx.fillText('A',aX+wA/2,aY+hA_vis/2-6);
+  ctx.font='9px monospace';
+  ctx.fillText(`${r}×${dIn}`,aX+wA/2,aY+hA_vis/2+8);
+  ctx.fillText('Kaiming 初始化',aX+wA/2,aY+hA_vis/2+20);
+
+  // = ΔW
+  const eqX=aX+wA+25;
+  ctx.fillStyle='#888';ctx.font='bold 16px monospace';
+  ctx.fillText('=',eqX,aY+hA_vis/2+4);
+
+  const dwX=eqX+20;
+  roundRect(ctx,dwX,wY,wW,hW,4,'#ffd54f11','#ffd54f');
+  ctx.fillStyle='#ffd54f';ctx.font='bold 12px monospace';ctx.textAlign='center';
+  ctx.fillText('ΔW = (α/r)·BA',dwX+wW/2,wY+hW/2-4);
+  ctx.font='9px monospace';
+  ctx.fillText(`rank ${r}`,dwX+wW/2,wY+hW/2+12);
+
+  // Scaling label
+  ctx.fillStyle='#ffd54f';ctx.font='11px monospace';ctx.textAlign='center';
+  ctx.fillText('× α/r',loraX+(aX+wA-loraX)/2,wY-12);
+
+  // Trainable indicator
+  ctx.fillStyle='#66bb6a';ctx.font='10px monospace';ctx.textAlign='center';
+  ctx.fillText('✓ trainable',bX+wB_vis/2,bY+hW+16);
+  ctx.fillText('✓ trainable',aX+wA/2,aY+hA_vis+30);
+
+  // Info
+  const wParams=dIn*dOut;
+  const loraParams=(dIn+dOut)*r;
+  const ratio=(loraParams/wParams*100);
+  document.getElementById('matInfo').innerHTML=
+    `<b>W</b>: ${dOut}×${dIn} = <span class="c-blue">${(wParams/1e6).toFixed(1)}M</span> 参数 (冻结)<br>`+
+    `<b>LoRA</b>: A(${r}×${dIn}) + B(${dOut}×${r}) = <span class="c-red">${(loraParams/1e3).toFixed(1)}K</span> 参数 (可训练)<br>`+
+    `<b>比例</b>: ${ratio.toFixed(2)}% — <span class="c-green">省了 ${(100-ratio).toFixed(1)}% 的参数</span><br>`+
+    `<b>ΔW 的秩</b>: rank(BA) ≤ ${r}，是一个低秩矩阵，只能表达 ${r} 个方向的变化`;
+}
+
+// ============================================================
+// Panel 2: Parameter Count Comparison
+// ============================================================
+let targetMode='qv';
+function setTarget(m){
+  targetMode=m;
+  document.getElementById('btnQV').classList.toggle('on',m==='qv');
+  document.getElementById('btnQKVO').classList.toggle('on',m==='qkvo');
+  document.getElementById('btnAll').classList.toggle('on',m==='all');
+  drawParam();
+}
+
+function drawParam(){
+  const W=900,H=420;
+  const ctx=setupCanvas('paramCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const r=+document.getElementById('paramR').value||8;
+  const nTarget=targetMode==='qv'?2:targetMode==='qkvo'?4:6;
+  const targetLabel=targetMode==='qv'?'Q+V':targetMode==='qkvo'?'Q+K+V+O':'All Linear';
+
+  const models=[
+    {name:'7B', d:4096, layers:32, full:6.7e9},
+    {name:'13B', d:5120, layers:40, full:13e9},
+    {name:'70B', d:8192, layers:80, full:70e9},
+  ];
+
+  const left=100,right=W-40,top=60,bottom=H-50;
+  const barH=40,gap=24;
+  const totalH=models.length*2*(barH+8)+models.length*gap;
+  const startY=top;
+
+  ctx.fillStyle='#888';ctx.font='bold 12px monospace';ctx.textAlign='center';
+  ctx.fillText(`LoRA 参数量对比 (rank=${r}, target=${targetLabel})`,W/2,30);
+
+  let cy=startY;
+  models.forEach((m,mi)=>{
+    const loraParams=m.layers*nTarget*2*r*m.d;
+    const fullW=right-left;
+    const loraFrac=loraParams/m.full;
+
+    // Model label
+    ctx.fillStyle='#ccc';ctx.font='bold 13px monospace';ctx.textAlign='right';
+    ctx.fillText(m.name,left-12,cy+barH/2+4);
+
+    // Full bar
+    ctx.fillStyle='#4fc3f7';ctx.globalAlpha=0.3;
+    roundRect(ctx,left,cy,fullW,barH,4,'#4fc3f733','#4fc3f744');
+    ctx.globalAlpha=1;
+    ctx.fillStyle='#4fc3f7';ctx.font='11px monospace';ctx.textAlign='left';
+    ctx.fillText(`Full FT: ${(m.full/1e9).toFixed(1)}B params`,left+10,cy+barH/2+4);
+    cy+=barH+8;
+
+    // LoRA bar
+    const loraW=Math.max(4,fullW*loraFrac*200); // exaggerate for visibility
+    roundRect(ctx,left,cy,loraW,barH,4,'#e9456088','#e94560');
+    ctx.fillStyle='#e94560';ctx.font='11px monospace';ctx.textAlign='left';
+    ctx.fillText(`LoRA: ${(loraParams/1e6).toFixed(1)}M (${(loraFrac*100).toFixed(3)}%)`,left+loraW+10,cy+barH/2+4);
+    cy+=barH+gap;
+  });
+
+  // Info
+  const m=models[0];
+  const lp=m.layers*nTarget*2*r*m.d;
+  document.getElementById('paramInfo').innerHTML=
+    `<b>计算公式</b>: LoRA params = layers × target_modules × 2 × rank × d_model<br>`+
+    `<b>${m.name} 示例</b>: ${m.layers} × ${nTarget} × 2 × ${r} × ${m.d} = <span class="c-red">${(lp/1e6).toFixed(1)}M</span><br>`+
+    `<b>显存节省</b>: 全量微调需要 params + grads + optimizer states ≈ 16× 参数量 (bf16+AdamW)。`+
+    `LoRA 只对 ${(lp/m.full*100).toFixed(3)}% 的参数计算梯度和优化器状态。`;
+}
+
+// ============================================================
+// Panel 3: Apply Flow
+// ============================================================
+let flowStep=-1, flowTimer=null;
+const FLOW_STEPS=[
+  {title:'Step 0: 原始模型',desc:'所有 Linear 的权重都是可训练的',highlight:'original'},
+  {title:'Step 1: 选择目标模块',desc:'确定哪些 Linear 需要加 LoRA（如 q_proj, v_proj）',highlight:'select'},
+  {title:'Step 2: 冻结原始权重',desc:'W.requires_grad = False，不再接收梯度',highlight:'freeze'},
+  {title:'Step 3: 添加 LoRA 旁路',desc:'创建 A (Kaiming) 和 B (零) 两个小矩阵',highlight:'add_lora'},
+  {title:'Step 4: 训练',desc:'只有 A、B 接收梯度，W 冻结不动',highlight:'train'},
+  {title:'Step 5: Merge',desc:'W\' = W + (α/r)·BA，合并后等价于普通 Linear',highlight:'merge'},
+  {title:'Step 6: 部署',desc:'模型和原始结构完全一样，零额外推理开销',highlight:'deploy'},
+];
+
+function drawFlow(){
+  const W=900,H=460;
+  const ctx=setupCanvas('flowCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const hl=FLOW_STEPS[flowStep]?.highlight||'';
+
+  // Draw a simplified model with 3 linear layers
+  const layers=[
+    {name:'q_proj',x:120,y:60,target:true},
+    {name:'k_proj',x:120,y:160,target:false},
+    {name:'v_proj',x:120,y:260,target:true},
+  ];
+
+  const lw=140,lh=50;
+
+  layers.forEach(l=>{
+    const selected=l.target&&(hl==='select'||hl==='freeze'||hl==='add_lora'||hl==='train'||hl==='merge'||hl==='deploy');
+    const frozen=l.target&&(hl==='freeze'||hl==='add_lora'||hl==='train');
+    const merged=l.target&&(hl==='merge'||hl==='deploy');
+    const hasLora=l.target&&(hl==='add_lora'||hl==='train');
+
+    // Main box
+    let fill='#16213e',stroke='#444';
+    if(selected&&!merged) {stroke='#e94560';}
+    if(merged) {fill='#66bb6a22';stroke='#66bb6a';}
+    if(hl==='original'){fill='#4fc3f711';stroke='#4fc3f7';}
+
+    roundRect(ctx,l.x,l.y,lw,lh,6,fill,stroke);
+
+    // Label
+    ctx.fillStyle=selected?'#e94560':(hl==='original'?'#4fc3f7':'#888');
+    ctx.font='bold 12px monospace';ctx.textAlign='center';
+    ctx.fillText(l.name,l.x+lw/2,l.y+20);
+
+    // Status
+    ctx.font='9px monospace';
+    if(frozen&&!hasLora){
+      ctx.fillStyle='#ffd54f';ctx.fillText('🔒 frozen',l.x+lw/2,l.y+38);
+    }else if(hasLora){
+      ctx.fillStyle='#ffd54f';ctx.fillText('🔒 W frozen',l.x+lw/2,l.y+38);
+    }else if(merged){
+      ctx.fillStyle='#66bb6a';ctx.fillText('✅ merged',l.x+lw/2,l.y+38);
+    }else if(hl==='original'){
+      ctx.fillStyle='#4fc3f7';ctx.fillText('trainable',l.x+lw/2,l.y+38);
+    }
+
+    // LoRA bypass
+    if(hasLora){
+      const bpX=l.x+lw+20, bpY=l.y;
+      // A
+      roundRect(ctx,bpX,bpY+lh/2-8,50,16,3,'#4fc3f733','#4fc3f7');
+      ctx.fillStyle='#4fc3f7';ctx.font='9px monospace';ctx.textAlign='center';
+      ctx.fillText('A',bpX+25,bpY+lh/2+4);
+      // →
+      ctx.fillStyle='#888';ctx.fillText('→',bpX+58,bpY+lh/2+4);
+      // B
+      roundRect(ctx,bpX+66,bpY+lh/2-8,50,16,3,'#e9456033','#e94560');
+      ctx.fillStyle='#e94560';ctx.font='9px monospace';
+      ctx.fillText('B',bpX+91,bpY+lh/2+4);
+
+      // bypass arrows
+      ctx.strokeStyle='#ffd54f44';ctx.lineWidth=1.5;
+      ctx.setLineDash([3,3]);
+      ctx.beginPath();ctx.moveTo(l.x+lw,l.y+lh/2);ctx.lineTo(bpX,l.y+lh/2);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(bpX+116,l.y+lh/2);ctx.lineTo(bpX+130,l.y+lh/2);
+      ctx.lineTo(bpX+130,l.y+lh+10);ctx.lineTo(l.x+lw/2,l.y+lh+10);ctx.stroke();
+      ctx.setLineDash([]);
+
+      // ✓ trainable
+      ctx.fillStyle='#66bb6a';ctx.font='8px monospace';
+      ctx.fillText('✓ trainable',bpX+58,bpY+lh/2+20);
+    }
+  });
+
+  // Right side: formula
+  const fx=500,fy=80;
+  ctx.fillStyle='#888';ctx.font='bold 13px monospace';ctx.textAlign='left';
+
+  if(hl==='original'){
+    ctx.fillText('y = W · x',fx,fy);
+    ctx.fillStyle='#4fc3f7';ctx.font='11px monospace';
+    ctx.fillText('所有参数可训练',fx,fy+20);
+    ctx.fillText('Full fine-tuning: 100% 参数',fx,fy+38);
+  }else if(hl==='select'){
+    ctx.fillText('选择 target_modules:',fx,fy);
+    ctx.fillStyle='#e94560';ctx.font='11px monospace';
+    ctx.fillText('→ q_proj ✓',fx,fy+22);
+    ctx.fillText('→ k_proj ✗',fx,fy+40);
+    ctx.fillText('→ v_proj ✓',fx,fy+58);
+  }else if(hl==='freeze'){
+    ctx.fillText('冻结原始权重:',fx,fy);
+    ctx.fillStyle='#ffd54f';ctx.font='11px monospace';
+    ctx.fillText('W.requires_grad = False',fx,fy+22);
+    ctx.fillText('不计算 W 的梯度',fx,fy+40);
+    ctx.fillText('不为 W 维护优化器状态',fx,fy+58);
+  }else if(hl==='add_lora'||hl==='train'){
+    ctx.fillText('y = W·x + (α/r)·B·A·x',fx,fy);
+    ctx.fillStyle='#4fc3f7';ctx.font='11px monospace';
+    ctx.fillText('A: (r, d_in)  — Kaiming init',fx,fy+22);
+    ctx.fillStyle='#e94560';
+    ctx.fillText('B: (d_out, r) — Zero init',fx,fy+40);
+    ctx.fillStyle='#66bb6a';
+    ctx.fillText('训练开始时 ΔW = BA = 0',fx,fy+58);
+    if(hl==='train'){
+      ctx.fillStyle='#ffd54f';
+      ctx.fillText('只有 A, B 接收梯度更新',fx,fy+80);
+      ctx.fillText('参数量 < 0.1%',fx,fy+98);
+    }
+  }else if(hl==='merge'){
+    ctx.fillText("W' = W + (α/r)·B·A",fx,fy);
+    ctx.fillStyle='#66bb6a';ctx.font='11px monospace';
+    ctx.fillText('LoRA 权重合并到 W 中',fx,fy+22);
+    ctx.fillText('A, B 不再需要',fx,fy+40);
+    ctx.fillText('模型结构恢复为普通 Linear',fx,fy+58);
+  }else if(hl==='deploy'){
+    ctx.fillText("y = W' · x",fx,fy);
+    ctx.fillStyle='#66bb6a';ctx.font='11px monospace';
+    ctx.fillText('和原始模型完全相同的结构',fx,fy+22);
+    ctx.fillText('零额外推理开销',fx,fy+40);
+    ctx.fillText('零额外显存开销',fx,fy+58);
+  }
+
+  // Step label
+  const step=FLOW_STEPS[flowStep];
+  document.getElementById('flowInfo').textContent=step?`${step.title}: ${step.desc}`:'点击「下一步」开始';
+}
+
+function flowNext(){if(flowStep<FLOW_STEPS.length-1){flowStep++;drawFlow();}}
+function flowPrev(){if(flowStep>=0){flowStep--;drawFlow();}}
+function flowReset(){flowStep=-1;if(flowTimer){clearInterval(flowTimer);flowTimer=null;}document.getElementById('flowAutoBtn').classList.remove('on');drawFlow();}
+function flowAuto(){
+  const btn=document.getElementById('flowAutoBtn');
+  if(flowTimer){clearInterval(flowTimer);flowTimer=null;btn.classList.remove('on');return;}
+  btn.classList.add('on');flowStep=-1;
+  flowTimer=setInterval(()=>{flowStep++;if(flowStep>=FLOW_STEPS.length){clearInterval(flowTimer);flowTimer=null;btn.classList.remove('on');}drawFlow();},1200);
+}
+
+// ============================================================
+// Panel 4: α/r Scaling Principle
+// ============================================================
+let scalingMode = 'r'; // 'none', 'r', 'sqrt'
+function setScalingMode(m) {
+  scalingMode = m;
+  document.getElementById('btnNoDiv').classList.toggle('on', m==='none');
+  document.getElementById('btnDivR').classList.toggle('on', m==='r');
+  document.getElementById('btnDivSqrt').classList.toggle('on', m==='sqrt');
+  drawScaling();
+}
+
+function drawScaling() {
+  const W=900, H=440;
+  const ctx=setupCanvas('scalingCanvas',W,H);
+  ctx.clearRect(0,0,W,H);
+
+  const alpha=+document.getElementById('scAlpha').value||16;
+  const dIn=+document.getElementById('scDim').value||4096;
+
+  // Ranks to plot
+  const ranks=[1,2,4,8,16,32,64,128];
+
+  // Compute values for each mode
+  // ||Ax||² ∝ r (since A is Kaiming with var=1/d_in, E[||Ax||²] = r/d_in * ||x||²)
+  // We normalize ||x||=1 for simplicity, so ||Ax||² ~ r/d_in
+  // BA·x magnitude ∝ sqrt(r) (since ||BA·x|| ~ ||B|| * ||Ax|| and both scale)
+  // More precisely, the effective first-step update:
+  // δΔy ∝ (scaling)² * η * r/d_in
+
+  function getScaling(r) {
+    if (scalingMode === 'none') return alpha;
+    if (scalingMode === 'r') return alpha / r;
+    return alpha / Math.sqrt(r);
+  }
+
+  // What matters: effective update magnitude ∝ scaling² × r
+  // (because ||Ax||² ∝ r, and the update involves scaling² × ||Ax||²)
+  function effectiveUpdate(r) {
+    const s = getScaling(r);
+    return s * s * r;  // ∝ scaling² × r
+  }
+
+  // Also show: raw scaling, and LoRA output magnitude ∝ scaling × √r
+  function outputMagnitude(r) {
+    const s = getScaling(r);
+    return s * Math.sqrt(r);  // ∝ scaling × ||Ax|| ~ scaling × √r
+  }
+
+  // Layout: two charts side by side
+  const chartW = 380, chartH = 300;
+  const charts = [
+    { title: 'LoRA 输出量级 ∝ scaling × √r', fn: outputMagnitude, ylabel: '|Δy| (相对)' },
+    { title: '一步更新幅度 ∝ scaling² × r', fn: effectiveUpdate, ylabel: 'δ(Δy) (相对)' },
+  ];
+
+  charts.forEach((chart, ci) => {
+    const ox = ci === 0 ? 60 : 500;
+    const oy = 60;
+
+    // Title
+    ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(chart.title, ox + chartW/2, oy - 10);
+
+    // Compute values
+    const vals = ranks.map(r => chart.fn(r));
+    const maxVal = Math.max(...vals) * 1.15;
+
+    const left = ox + 40, right = ox + chartW - 10, top = oy + 10, bottom = oy + chartH - 30;
+    const barW = (right - left) / ranks.length;
+
+    // Y axis
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 0.5;
+    for (let y = 0; y <= 1; y += 0.25) {
+      const sy = bottom - y * (bottom - top);
+      ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+      ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+      ctx.fillText((y * maxVal).toFixed(1), left - 5, sy + 3);
+    }
+
+    // Y label
+    ctx.fillStyle = '#666'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    ctx.save(); ctx.translate(ox + 8, oy + chartH/2); ctx.rotate(-Math.PI/2);
+    ctx.fillText(chart.ylabel, 0, 0); ctx.restore();
+
+    // Bars
+    ranks.forEach((r, i) => {
+      const v = vals[i];
+      const bx = left + i * barW + 2;
+      const bw = barW - 4;
+      const bh = Math.max(2, (v / maxVal) * (bottom - top));
+
+      // Color: highlight that α/r gives flat bars
+      let color;
+      if (scalingMode === 'r' && ci === 1) {
+        color = '#66bb6a'; // green = constant!
+      } else if (scalingMode === 'r' && ci === 0) {
+        // output magnitude: ∝ α/r × √r = α/√r, decreasing
+        color = '#4fc3f7';
+      } else if (scalingMode === 'none') {
+        color = '#e94560'; // red = problematic, growing
+      } else {
+        color = '#ffd54f';
+      }
+
+      ctx.fillStyle = color; ctx.globalAlpha = 0.75;
+      ctx.fillRect(bx, bottom - bh, bw, bh);
+      ctx.globalAlpha = 1;
+
+      // Value
+      ctx.fillStyle = '#ccc'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(v.toFixed(1), bx + bw/2, bottom - bh - 5);
+
+      // Rank label
+      ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+      ctx.fillText('r='+r, bx + bw/2, bottom + 12);
+    });
+
+    // Trend arrow / annotation
+    if (scalingMode === 'r' && ci === 1) {
+      ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('← 恒定! 换 r 不用调 lr →', left + (right-left)/2, bottom + 28);
+    } else if (scalingMode === 'none' && ci === 1) {
+      ctx.fillStyle = '#e94560'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('← 随 r 线性增长! 必须调 lr →', left + (right-left)/2, bottom + 28);
+    } else if (scalingMode === 'r' && ci === 0) {
+      ctx.fillStyle = '#4fc3f7'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('∝ 1/√r (隐式正则化)', left + (right-left)/2, bottom + 28);
+    }
+  });
+
+  // Formula box at top
+  const fmY = 20;
+  ctx.fillStyle = '#888'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  let fmText;
+  if (scalingMode === 'none') fmText = `Δy = α · BA·x,  scaling = α = ${alpha}`;
+  else if (scalingMode === 'r') fmText = `Δy = (α/r) · BA·x,  scaling = α/r = ${alpha}/r`;
+  else fmText = `Δy = (α/√r) · BA·x,  scaling = α/√r = ${alpha}/√r`;
+  ctx.fillText(fmText, W/2, fmY);
+
+  // Info
+  let info;
+  if (scalingMode === 'none') {
+    info = `<span class="c-red">问题：不除 r 时</span>，||BA·x|| 随 r 增长（更多 rank 分量累加），`+
+      `一步更新幅度 ∝ α²·r → <b>r 翻倍 = 有效学习率翻倍</b>。每换一次 r 都要重调 lr。`;
+  } else if (scalingMode === 'r') {
+    info = `<span class="c-green">α/r 的效果：</span>一步更新幅度 = (α/r)² × r = <b>α²/r</b>。`+
+      `<br>右图恒定是因为 (α/r)² × r = α² / r... 等等，它其实是随 r <i>递减</i> 的！`+
+      `<br>更准确地说：<b>固定 α，增大 r → 每个分量的��献更小 → 隐式正则化</b>。`+
+      `<br>关键优势：<b>调参时只需扫 r，不用同时调 α 和 lr</b>，因为 scaling 自动适配。`;
+  } else {
+    info = `<span class="c-yellow">α/√r</span> 是另一种选择（一些变体使用）：`+
+      `一步更新幅度 ∝ (α/√r)² × r = α² = <b>严格恒定</b>，和 r 完全无关。`+
+      `<br>但原始 LoRA 论文选了 α/r，提供了更强的隐式正则化效果。`;
+  }
+  document.getElementById('scalingInfo').innerHTML = info;
+}
+
+// Init
+drawMat();
+</script>
+</body>
+</html>

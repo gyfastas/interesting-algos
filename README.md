@@ -16,6 +16,12 @@
 | 008 | [手写 Cross Entropy Loss](./algorithms/cross-entropy-loss/) | 损失函数、信息论 | ⭐ |
 | 009 | [PPO / GRPO / DPO 对比](./algorithms/ppo-grpo-dpo/) | RLHF、强化学习 | ⭐⭐⭐ |
 | 010 | [手写 MSE Loss](./algorithms/mse-loss/) | 损失函数、数值稳定性 | ⭐ |
+| 011 | [LoRA 低秩适配](./algorithms/lora/) | 参数高效微调、低秩分解 | ⭐⭐ |
+| 012 | [BPE Tokenizer](./algorithms/bpe-tokenizer/) | 分词算法、BPE vs BBPE | ⭐⭐ |
+| 013 | [Top-p & Top-k 采样](./algorithms/top-p-top-k/) | 解码策略、采样算法 | ⭐ |
+| 014 | [K-Means 聚类](./algorithms/k-means/) | 无监督学习、聚类算法 | ⭐ |
+| 015 | [快速排序](./algorithms/quick-sort/) | 排序、分治、Partition | ⭐⭐ |
+| 016 | [多元线性回归](./algorithms/linear-regression/) | 梯度下降、Forward & Backward | ⭐ |
 
 ## 目录结构
 

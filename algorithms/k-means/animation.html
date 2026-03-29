@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K-Means 聚类 — 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:1060px;margin:0 auto}
+  .panel.active{display:block}
+  canvas{display:block;border:1px solid #0f3460;border-radius:8px;background:#0d1b2a}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls select,.controls input[type=number]{padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  .main-area{display:flex;gap:14px;align-items:flex-start}
+  .main-area canvas{flex-shrink:0}
+  .code-panel{flex:1;min-width:280px;max-width:380px}
+  .code-block{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;font-size:.72em;line-height:1.7;overflow-x:auto;white-space:pre;max-height:480px;overflow-y:auto}
+  .code-block .hl{background:#e9456033;display:inline;border-radius:2px}
+  .code-block .comment{color:#555}
+  .code-block .kw{color:#ab47bc}
+  .code-block .fn{color:#4fc3f7}
+  .code-block .str{color:#66bb6a}
+  .code-block .num{color:#ffd54f}
+  .code-title{font-size:.8em;color:#888;margin-bottom:6px}
+  .step-indicator{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .step-dot{padding:4px 10px;border-radius:12px;font-size:.72em;background:#16213e;border:1px solid #0f3460;color:#666}
+  .step-dot.active{background:#e94560;border-color:#e94560;color:#fff}
+  .step-dot.done{background:#0f3460;border-color:#4fc3f7;color:#4fc3f7}
+</style>
+</head>
+<body>
+
+<h1>K-Means 聚类</h1>
+<p class="subtitle">Assign + Update 迭代可视化 — 配合 solution.py 代码讲解</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">2D 聚类</button>
+  <button class="tab-btn" onclick="switchTab(1)">3D 聚类</button>
+  <button class="tab-btn" onclick="switchTab(2)">Elbow Method</button>
+</div>
+
+<!-- ============== Panel 1: 2D ============== -->
+<div class="panel active" id="panel-0">
+  <div class="step-indicator" id="stepIndicator"></div>
+  <div class="main-area">
+    <div>
+      <canvas id="canvas2d" width="600" height="480"></canvas>
+      <div class="controls">
+        <label>K =</label>
+        <input type="number" id="kInput" value="3" min="2" max="8" style="width:50px">
+        <label>数据:</label>
+        <select id="dataSelect">
+          <option value="blobs">3 个高斯簇</option>
+          <option value="circles">同心圆</option>
+          <option value="moons">月牙形</option>
+          <option value="random">随机均匀</option>
+        </select>
+        <label>初始化:</label>
+        <select id="initSelect">
+          <option value="kmeans++">K-Means++</option>
+          <option value="random">随机</option>
+        </select>
+      </div>
+      <div class="controls" style="margin-top:6px">
+        <button onclick="reset2D()">重置</button>
+        <button onclick="step2D()">下一步</button>
+        <button id="autoBtn" onclick="auto2D()">自动播放</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title" id="codeTitle">solution.py — 对应代码</div>
+      <div class="code-block" id="codeBlock"></div>
+    </div>
+  </div>
+  <div class="info-box" id="info2d">点击「重置」生成数据，然后「下一步」逐步执行 K-Means。右侧显示对应的 Python 代码。</div>
+</div>
+
+<!-- ============== Panel 2: 3D ============== -->
+<div class="panel" id="panel-1">
+  <div class="main-area">
+    <div>
+      <canvas id="canvas3d" width="600" height="480"></canvas>
+      <div class="controls">
+        <label>K =</label>
+        <input type="number" id="k3dInput" value="4" min="2" max="8" style="width:50px">
+        <button onclick="reset3D()">重置</button>
+        <button onclick="step3D()">下一步</button>
+        <button id="auto3dBtn" onclick="auto3D()">自动播放</button>
+        <label style="margin-left:8px">拖拽旋转 ↻</label>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">3D K-Means — 同样的算法，多一个维度</div>
+      <div class="code-block" id="code3d"></div>
+    </div>
+  </div>
+  <div class="info-box" id="info3d">点击「重置」生成 3D 数据。拖拽画布旋转视角。</div>
+</div>
+
+<!-- ============== Panel 3: Elbow ============== -->
+<div class="panel" id="panel-2">
+  <div class="main-area">
+    <div>
+      <canvas id="elbowCanvas" width="600" height="420"></canvas>
+      <div class="controls">
+        <button onclick="runElbow()">运行 Elbow Method</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">elbow_method() — 选择最优 K</div>
+      <div class="code-block" id="codeElbow"></div>
+    </div>
+  </div>
+  <div class="info-box" id="elbowInfo">点击运行，对 K=1~8 分别执行 K-Means，画 WCSS 曲线找拐点。</div>
+</div>
+
+<script>
+// ============================================================
+// Globals & Utils
+// ============================================================
+const COLORS = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a'];
+const COLORS_DIM = ['#e9456055','#4fc3f755','#66bb6a55','#ffd54f55','#ab47bc55','#ff980055','#26c6da55','#ec407a55'];
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+  if (i===1 && !data3d) reset3D();
+  if (i===2) showElbowCode();
+}
+
+// Canvas setup — call once, return {canvas, ctx, W, H}
+const canvasCache = {};
+function getCtx(id) {
+  if (!canvasCache[id]) {
+    const c = document.getElementById(id);
+    const w = +c.getAttribute('width'), h = +c.getAttribute('height');
+    c.width = w * DPR; c.height = h * DPR;
+    c.style.width = w + 'px'; c.style.height = h + 'px';
+    const ctx = c.getContext('2d');
+    ctx.scale(DPR, DPR);
+    canvasCache[id] = { canvas: c, ctx, W: w, H: h };
+  }
+  const cc = canvasCache[id];
+  cc.ctx.save();
+  cc.ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  cc.ctx.clearRect(0, 0, cc.W, cc.H);
+  cc.ctx.restore();
+  return cc;
+}
+
+// Seeded RNG
+let seed = 42;
+function srand(s) { seed = s; }
+function rand() { seed = (seed * 16807 + 0) % 2147483647; return seed / 2147483647; }
+function randn() { return Math.sqrt(-2 * Math.log(rand())) * Math.cos(2 * Math.PI * rand()); }
+
+function dist2(a, b) {
+  let s = 0;
+  for (let d = 0; d < a.length; d++) s += (a[d] - b[d]) ** 2;
+  return s;
+}
+
+// ============================================================
+// Code snippets from solution.py
+// ============================================================
+const CODE = {
+  init_random: `<span class="comment"># solution.py — 随机初始化</span>
+<span class="kw">def</span> <span class="fn">fit</span>(self, X):
+    N, D = X.shape
+
+    <span class="comment"># Step 1: 随机选 K 个点作为初始中心</span>
+<span class="hl">    idx = np.random.choice(N, self.k, replace=False)
+    self.centers = X[idx].copy()</span>`,
+
+  init_pp: `<span class="comment"># solution.py — K-Means++ 初始化</span>
+<span class="kw">def</span> <span class="fn">_kmeans_pp_init</span>(self, X):
+    N = len(X)
+<span class="hl">    <span class="comment"># 1. 随机选第一个中心</span>
+    centers = [X[np.random.randint(N)].copy()]
+
+    <span class="kw">for</span> _ <span class="kw">in</span> range(1, self.k):
+        <span class="comment"># 2. D(x)² = 到最近中心的距离²</span>
+        dists = np.array([
+            np.sum((X - c)**2, axis=1)
+            <span class="kw">for</span> c <span class="kw">in</span> centers
+        ])
+        min_dists = dists.min(axis=0)
+
+        <span class="comment"># 3. 按 D(x)² 概率选下一个中心</span>
+        probs = min_dists / min_dists.sum()
+        next_idx = np.random.choice(N, p=probs)
+        centers.append(X[next_idx].copy())</span>
+
+    <span class="kw">return</span> np.array(centers)`,
+
+  assign: `<span class="comment"># solution.py — Assign 步</span>
+<span class="kw">for</span> it <span class="kw">in</span> range(self.max_iter):
+
+<span class="hl">    <span class="comment"># Step 2: 每个点分配到最近中心</span>
+    <span class="comment"># dists[i,k] = ||x_i - center_k||²</span>
+    dists = self._compute_distances(X, self.centers)
+    self.labels = np.argmin(dists, axis=1)</span>
+
+<span class="comment"># _compute_distances 用了展开公式:</span>
+<span class="comment"># ||x-c||² = ||x||² + ||c||² - 2x·c</span>
+X_sq = np.sum(X**2, axis=1, keepdims=True)
+C_sq = np.sum(centers**2, axis=1, keepdims=True)
+cross = X @ centers.T
+<span class="kw">return</span> X_sq + C_sq.T - <span class="num">2</span> * cross`,
+
+  update: `<span class="comment"># solution.py — Update 步</span>
+
+<span class="hl">    <span class="comment"># Step 3: 每个中心 = 成员均值</span>
+    new_centers = np.empty_like(self.centers)
+    <span class="kw">for</span> k <span class="kw">in</span> range(self.k):
+        members = X[self.labels == k]
+        <span class="kw">if</span> len(members) > <span class="num">0</span>:
+            new_centers[k] = members.mean(axis=0)
+        <span class="kw">else</span>:
+            <span class="comment"># 空簇: 随机重选</span>
+            new_centers[k] = X[np.random.randint(N)]</span>`,
+
+  converge: `<span class="comment"># solution.py — 收敛检查</span>
+
+<span class="hl">    <span class="comment"># Step 4: 中心是否还在移动？</span>
+    shift = np.linalg.norm(
+        new_centers - self.centers
+    )
+    self.centers = new_centers
+    self.n_iter = it + 1
+
+    <span class="kw">if</span> shift < self.tol:
+        <span class="kw">break</span></span>
+
+<span class="comment"># 计算最终 WCSS</span>
+self.inertia = self._compute_wcss(X)
+
+<span class="comment"># WCSS = Σ_k Σ_{x∈C_k} ||x - μ_k||²</span>
+<span class="comment"># 每步 WCSS 单调不增 → 一定收敛</span>`,
+
+  overview: `<span class="comment"># solution.py — K-Means 完整流程</span>
+<span class="kw">class</span> <span class="fn">KMeans</span>:
+    <span class="kw">def</span> <span class="fn">fit</span>(self, X):
+        <span class="comment"># 1. 初始化 K 个中心</span>
+        self.centers = self._kmeans_pp_init(X)
+
+        <span class="kw">for</span> it <span class="kw">in</span> range(self.max_iter):
+            <span class="comment"># 2. Assign: 最近中心</span>
+            dists = self._compute_distances(
+                X, self.centers
+            )
+            self.labels = np.argmin(dists, axis=1)
+
+            <span class="comment"># 3. Update: 中心 = 均值</span>
+            <span class="kw">for</span> k <span class="kw">in</span> range(self.k):
+                members = X[self.labels == k]
+                new_centers[k] = members.mean(0)
+
+            <span class="comment"># 4. 收敛？</span>
+            <span class="kw">if</span> shift < self.tol:
+                <span class="kw">break</span>`,
+
+  elbow: `<span class="comment"># solution.py — Elbow Method</span>
+<span class="kw">def</span> <span class="fn">elbow_method</span>(X, k_range, n_runs=3):
+<span class="hl">    results = []
+    <span class="kw">for</span> k <span class="kw">in</span> k_range:
+        best_wcss = float(<span class="str">'inf'</span>)
+        <span class="kw">for</span> _ <span class="kw">in</span> range(n_runs):
+            km = KMeans(k=k)
+            km.fit(X)
+            best_wcss = min(best_wcss, km.inertia)
+        results.append((k, best_wcss))</span>
+
+    <span class="comment"># 画 K vs WCSS 曲线</span>
+    <span class="comment"># 拐点 = 最佳 K</span>
+    <span class="kw">return</span> results`,
+
+  silhouette: `<span class="comment"># solution.py — 轮廓系数</span>
+<span class="kw">def</span> <span class="fn">silhouette_score</span>(X, labels):
+    <span class="kw">for</span> i <span class="kw">in</span> range(N):
+        <span class="comment"># a(i): 同簇平均距离</span>
+        same = X[labels == labels[i]]
+        a_i = mean(||same - X[i]||)
+
+        <span class="comment"># b(i): 最近其他簇平均距离</span>
+        b_i = min over other clusters
+
+        <span class="comment"># s(i) ∈ [-1, 1]</span>
+        s[i] = (b_i - a_i) / max(a_i, b_i)
+    <span class="kw">return</span> mean(s)`,
+};
+
+function showCode(key, title) {
+  document.getElementById('codeBlock').innerHTML = CODE[key] || '';
+  if (title) document.getElementById('codeTitle').textContent = title;
+}
+
+function showElbowCode() {
+  document.getElementById('codeElbow').innerHTML = CODE.elbow;
+}
+
+// ============================================================
+// Data generation
+// ============================================================
+function generateData(type, n = 200) {
+  srand(42);
+  const pts = [];
+  if (type === 'blobs') {
+    const centers = [[150, 130], [450, 340], [200, 380]];
+    for (let i = 0; i < n; i++) {
+      const ct = centers[i % 3];
+      pts.push([ct[0] + randn() * 45, ct[1] + randn() * 45]);
+    }
+  } else if (type === 'circles') {
+    for (let i = 0; i < n; i++) {
+      const a = rand() * Math.PI * 2;
+      const r = i < n/2 ? 70 + randn() * 12 : 160 + randn() * 12;
+      pts.push([300 + r * Math.cos(a), 240 + r * Math.sin(a)]);
+    }
+  } else if (type === 'moons') {
+    for (let i = 0; i < n; i++) {
+      if (i < n/2) {
+        const a = Math.PI * (i / (n/2));
+        pts.push([220 + 110 * Math.cos(a) + randn() * 18, 260 - 110 * Math.sin(a) + randn() * 18]);
+      } else {
+        const a = Math.PI * ((i - n/2) / (n/2));
+        pts.push([330 - 110 * Math.cos(a) + randn() * 18, 260 + 110 * Math.sin(a) + randn() * 18]);
+      }
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      pts.push([40 + rand() * 520, 30 + rand() * 420]);
+    }
+  }
+  return pts;
+}
+
+// ============================================================
+// K-Means engine
+// ============================================================
+function kmeansInit(points, K, method) {
+  const N = points.length;
+  if (method === 'random') {
+    const idx = new Set();
+    while (idx.size < K) idx.add(Math.floor(rand() * N));
+    return [...idx].map(i => [...points[i]]);
+  }
+  // K-Means++
+  const centers = [[...points[Math.floor(rand() * N)]]];
+  for (let c = 1; c < K; c++) {
+    const dists = points.map(p => Math.min(...centers.map(ct => dist2(p, ct))));
+    const total = dists.reduce((a, b) => a + b, 0);
+    let r = rand() * total, cum = 0;
+    for (let i = 0; i < N; i++) {
+      cum += dists[i];
+      if (cum >= r) { centers.push([...points[i]]); break; }
+    }
+    if (centers.length <= c) centers.push([...points[Math.floor(rand() * N)]]);
+  }
+  return centers;
+}
+
+function kmeansAssign(points, centers) {
+  return points.map(p => {
+    let best = 0, bestD = Infinity;
+    for (let k = 0; k < centers.length; k++) {
+      const d = dist2(p, centers[k]);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
+  });
+}
+
+function kmeansUpdate(points, labels, K, dims) {
+  const centers = [];
+  for (let k = 0; k < K; k++) {
+    const members = points.filter((_, i) => labels[i] === k);
+    if (members.length === 0) {
+      centers.push(points[Math.floor(rand() * points.length)].slice());
+    } else {
+      const c = new Array(dims).fill(0);
+      members.forEach(m => { for (let d = 0; d < dims; d++) c[d] += m[d]; });
+      for (let d = 0; d < dims; d++) c[d] /= members.length;
+      centers.push(c);
+    }
+  }
+  return centers;
+}
+
+function computeWCSS(points, labels, centers) {
+  let wcss = 0;
+  points.forEach((p, i) => { if (labels[i] >= 0) wcss += dist2(p, centers[labels[i]]); });
+  return wcss;
+}
+
+// ============================================================
+// Panel 1: 2D Visualization
+// ============================================================
+let data2d, centers2d, labels2d, prevCenters2d, iterCount, phase2d, autoTimer, converged;
+
+// Phase: 'init' → 'assign' → 'update' → 'assign' → 'update' → ... → 'converged'
+const PHASES = [
+  { name: '初始化', code: 'init' },
+  { name: 'Assign', code: 'assign' },
+  { name: 'Update', code: 'update' },
+  { name: '收敛?', code: 'converge' },
+];
+
+function updateStepIndicator() {
+  const el = document.getElementById('stepIndicator');
+  const phaseLabels = converged
+    ? ['初始化', ...Array.from({length: iterCount}, (_, i) => `#${i+1} Assign → Update`), '收敛 ✓']
+    : ['初始化', ...Array.from({length: iterCount}, (_, i) => `#${i+1} Assign → Update`)];
+
+  if (phase2d === 'assign' || phase2d === 'update') {
+    phaseLabels.push(`#${iterCount+1} ${phase2d === 'assign' ? 'Assign' : 'Update'}...`);
+  }
+
+  el.innerHTML = phaseLabels.map((label, i) => {
+    const isLast = i === phaseLabels.length - 1;
+    const cls = isLast ? 'active' : 'done';
+    return `<span class="step-dot ${cls}">${label}</span>`;
+  }).join('');
+}
+
+function reset2D() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; document.getElementById('autoBtn').classList.remove('on'); }
+  const K = +document.getElementById('kInput').value;
+  const dataType = document.getElementById('dataSelect').value;
+  const initMethod = document.getElementById('initSelect').value;
+
+  data2d = generateData(dataType, 200);
+  srand(Date.now() % 10000);
+  centers2d = kmeansInit(data2d, K, initMethod);
+  labels2d = new Array(data2d.length).fill(-1);
+  prevCenters2d = null;
+  iterCount = 0;
+  phase2d = 'init';
+  converged = false;
+
+  draw2D();
+  showCode(initMethod === 'kmeans++' ? 'init_pp' : 'init_random',
+    `solution.py — ${initMethod === 'kmeans++' ? 'K-Means++ 初始化' : '随机初始化'}`);
+  updateStepIndicator();
+
+  const K2 = centers2d.length;
+  document.getElementById('info2d').innerHTML =
+    `已生成 <span class="c-blue">${data2d.length}</span> 个点，` +
+    `用 <span class="c-red">${initMethod}</span> 初始化了 <span class="c-red">${K2}</span> 个中心（×标记）。<br>` +
+    `点击「下一步」执行第一次 <b>Assign</b>（分配每个点到最近中心）。`;
+}
+
+function step2D() {
+  if (!data2d) { reset2D(); return; }
+  if (converged) return;
+
+  const K = centers2d.length;
+
+  if (phase2d === 'init' || phase2d === 'update' || phase2d === 'converge') {
+    // → Assign
+    phase2d = 'assign';
+    labels2d = kmeansAssign(data2d, centers2d);
+    draw2D();
+    showCode('assign', `solution.py — Assign (迭代 #${iterCount + 1})`);
+    updateStepIndicator();
+
+    const counts = new Array(K).fill(0);
+    labels2d.forEach(l => { if (l >= 0) counts[l]++; });
+    document.getElementById('info2d').innerHTML =
+      `<b>Assign 步 (迭代 #${iterCount + 1})</b>: 每个点 → 最近的中心<br>` +
+      `各簇大小: [${counts.map((c, i) => `<span style="color:${COLORS[i]}">${c}</span>`).join(', ')}]<br>` +
+      `<code>dists = ||x_i - center_k||²; labels = argmin(dists)</code><br>` +
+      `点击「下一步」执行 <b>Update</b>（移动中心到成员均值）。`;
+  } else if (phase2d === 'assign') {
+    // → Update
+    phase2d = 'update';
+    prevCenters2d = centers2d.map(c => [...c]);
+    centers2d = kmeansUpdate(data2d, labels2d, K, 2);
+
+    const shift = prevCenters2d.reduce((s, c, i) => s + Math.sqrt(dist2(c, centers2d[i])), 0);
+
+    draw2D();
+
+    if (shift < 0.5) {
+      converged = true;
+      iterCount++;
+      phase2d = 'converge';
+      showCode('converge', `solution.py — 收敛! (共 ${iterCount} 轮)`);
+      updateStepIndicator();
+
+      const wcss = computeWCSS(data2d, labels2d, centers2d);
+      document.getElementById('info2d').innerHTML =
+        `<span class="c-green">已收敛!</span> 中心总移动 = ${shift.toFixed(4)} < tol<br>` +
+        `共迭代 <span class="c-red">${iterCount}</span> 轮 | ` +
+        `WCSS = <span class="c-yellow">${wcss.toFixed(0)}</span><br>` +
+        `<code>if shift < self.tol: break</code>`;
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; document.getElementById('autoBtn').classList.remove('on'); }
+    } else {
+      showCode('update', `solution.py — Update (迭代 #${iterCount + 1})`);
+      updateStepIndicator();
+
+      document.getElementById('info2d').innerHTML =
+        `<b>Update 步 (迭代 #${iterCount + 1})</b>: 每个中心 → 成员均值<br>` +
+        `中心总移动: <span class="c-yellow">${shift.toFixed(2)}</span>（箭头显示移动方向）<br>` +
+        `<code>new_centers[k] = X[labels == k].mean(axis=0)</code><br>` +
+        `点击「下一步」执行下一次 <b>Assign</b>。`;
+      iterCount++;
+    }
+  }
+}
+
+function auto2D() {
+  const btn = document.getElementById('autoBtn');
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!data2d) reset2D();
+  autoTimer = setInterval(() => {
+    step2D();
+    if (converged) { clearInterval(autoTimer); autoTimer = null; btn.classList.remove('on'); }
+  }, 800);
+}
+
+function draw2D() {
+  const { ctx, W, H } = getCtx('canvas2d');
+  if (!data2d) return;
+
+  // Draw Voronoi regions (if assigned)
+  if (labels2d[0] >= 0) {
+    const step = 8;
+    for (let x = 0; x < W; x += step) {
+      for (let y = 0; y < H; y += step) {
+        let best = 0, bestD = Infinity;
+        for (let k = 0; k < centers2d.length; k++) {
+          const d = (x - centers2d[k][0]) ** 2 + (y - centers2d[k][1]) ** 2;
+          if (d < bestD) { bestD = d; best = k; }
+        }
+        ctx.fillStyle = COLORS_DIM[best % COLORS_DIM.length];
+        ctx.fillRect(x, y, step, step);
+      }
+    }
+  }
+
+  // Draw lines from points to centers (for assign step)
+  if (phase2d === 'assign' && labels2d[0] >= 0) {
+    ctx.globalAlpha = 0.08;
+    data2d.forEach((p, i) => {
+      const k = labels2d[i];
+      if (k >= 0) {
+        ctx.strokeStyle = COLORS[k % COLORS.length];
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(p[0], p[1]);
+        ctx.lineTo(centers2d[k][0], centers2d[k][1]);
+        ctx.stroke();
+      }
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  // Draw points
+  data2d.forEach((p, i) => {
+    const k = labels2d[i];
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = k >= 0 ? COLORS[k % COLORS.length] : '#555';
+    ctx.globalAlpha = k >= 0 ? 0.7 : 0.4;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+
+  // Draw center movement arrows (during update)
+  if (phase2d === 'update' && prevCenters2d) {
+    prevCenters2d.forEach((old, k) => {
+      const cur = centers2d[k];
+      const dx = cur[0] - old[0], dy = cur[1] - old[1];
+      const len = Math.sqrt(dx*dx + dy*dy);
+      if (len < 0.5) return;
+
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(old[0], old[1]);
+      ctx.lineTo(cur[0], cur[1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Arrowhead
+      const angle = Math.atan2(dy, dx);
+      const aLen = 8;
+      ctx.beginPath();
+      ctx.moveTo(cur[0], cur[1]);
+      ctx.lineTo(cur[0] - aLen * Math.cos(angle - 0.4), cur[1] - aLen * Math.sin(angle - 0.4));
+      ctx.moveTo(cur[0], cur[1]);
+      ctx.lineTo(cur[0] - aLen * Math.cos(angle + 0.4), cur[1] - aLen * Math.sin(angle + 0.4));
+      ctx.stroke();
+    });
+  }
+
+  // Draw centers
+  centers2d.forEach((ct, k) => {
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(ct[0], ct[1], 12, 0, Math.PI * 2);
+    ctx.fillStyle = '#000';
+    ctx.globalAlpha = 0.5;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Cross marker
+    const s = 8;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#fff';
+    ctx.beginPath(); ctx.moveTo(ct[0]-s, ct[1]-s); ctx.lineTo(ct[0]+s, ct[1]+s); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ct[0]+s, ct[1]-s); ctx.lineTo(ct[0]-s, ct[1]+s); ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = COLORS[k % COLORS.length];
+    ctx.beginPath(); ctx.moveTo(ct[0]-s, ct[1]-s); ctx.lineTo(ct[0]+s, ct[1]+s); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ct[0]+s, ct[1]-s); ctx.lineTo(ct[0]-s, ct[1]+s); ctx.stroke();
+
+    // Label
+    ctx.fillStyle = COLORS[k % COLORS.length];
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`μ${k}`, ct[0] + 14, ct[1] - 8);
+  });
+
+  // Top-left info
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`K=${centers2d.length} | 迭代: ${iterCount}`, 8, 16);
+  if (labels2d[0] >= 0) {
+    const wcss = computeWCSS(data2d, labels2d, centers2d);
+    ctx.fillText(`WCSS: ${wcss.toFixed(0)}`, 8, 32);
+  }
+  if (converged) {
+    ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 12px monospace';
+    ctx.fillText('✓ 已收敛', 8, 48);
+  }
+}
+
+// ============================================================
+// Panel 2: 3D Visualization
+// ============================================================
+let data3d, centers3d, labels3d, step3dCount, auto3dTimer, converged3d;
+let rotX = -0.4, rotY = 0.6, isDragging = false, lastMouse = {x:0, y:0};
+
+function generate3DData(K, n = 250) {
+  const pts = [];
+  const trueCenters = [];
+  for (let k = 0; k < K; k++) {
+    trueCenters.push([(rand()-0.5)*280, (rand()-0.5)*280, (rand()-0.5)*280]);
+  }
+  for (let i = 0; i < n; i++) {
+    const ct = trueCenters[i % K];
+    pts.push([ct[0]+randn()*35, ct[1]+randn()*35, ct[2]+randn()*35]);
+  }
+  return pts;
+}
+
+function project3D(p, W, H) {
+  let x = p[0], y = p[1], z = p[2];
+  let x1 = x * Math.cos(rotY) - z * Math.sin(rotY);
+  let z1 = x * Math.sin(rotY) + z * Math.cos(rotY);
+  let y1 = y * Math.cos(rotX) - z1 * Math.sin(rotX);
+  let z2 = y * Math.sin(rotX) + z1 * Math.cos(rotX);
+  const scale = 0.9 + z2 * 0.0008;
+  return { x: W/2 + x1 * scale, y: H/2 + y1 * scale, z: z2, s: scale };
+}
+
+function reset3D() {
+  if (auto3dTimer) { clearInterval(auto3dTimer); auto3dTimer = null; document.getElementById('auto3dBtn').classList.remove('on'); }
+  const K = +document.getElementById('k3dInput').value;
+  srand(123);
+  data3d = generate3DData(K, 250);
+  srand(Date.now() % 10000 + 7);
+  centers3d = kmeansInit(data3d, K, 'kmeans++');
+  labels3d = new Array(data3d.length).fill(-1);
+  step3dCount = 0;
+  converged3d = false;
+  draw3D();
+  show3DCode('init');
+  document.getElementById('info3d').innerHTML = `3D 数据: ${data3d.length} 点，K=${K}。拖拽旋转视角。`;
+}
+
+function step3D() {
+  if (!data3d) { reset3D(); return; }
+  if (converged3d) return;
+  const K = centers3d.length;
+
+  if (step3dCount % 2 === 0) {
+    labels3d = kmeansAssign(data3d, centers3d);
+    draw3D();
+    show3DCode('assign');
+    const counts = new Array(K).fill(0);
+    labels3d.forEach(l => { if (l >= 0) counts[l]++; });
+    document.getElementById('info3d').innerHTML =
+      `<b>Assign #${Math.floor(step3dCount/2)+1}</b>: 各簇 [${counts.join(', ')}]`;
+  } else {
+    const old = centers3d.map(c => [...c]);
+    centers3d = kmeansUpdate(data3d, labels3d, K, 3);
+    const shift = old.reduce((s, c, i) => s + Math.sqrt(dist2(c, centers3d[i])), 0);
+    draw3D();
+    if (shift < 1) {
+      converged3d = true;
+      show3DCode('converge');
+      document.getElementById('info3d').innerHTML =
+        `<span class="c-green">收敛!</span> ${Math.floor(step3dCount/2)+1} 轮 | shift=${shift.toFixed(3)}`;
+      if (auto3dTimer) { clearInterval(auto3dTimer); auto3dTimer = null; document.getElementById('auto3dBtn').classList.remove('on'); }
+    } else {
+      show3DCode('update');
+      document.getElementById('info3d').innerHTML =
+        `<b>Update #${Math.floor(step3dCount/2)+1}</b>: shift=${shift.toFixed(2)}`;
+    }
+  }
+  step3dCount++;
+}
+
+function auto3D() {
+  const btn = document.getElementById('auto3dBtn');
+  if (auto3dTimer) { clearInterval(auto3dTimer); auto3dTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!data3d) reset3D();
+  auto3dTimer = setInterval(() => {
+    step3D();
+    if (converged3d) { clearInterval(auto3dTimer); auto3dTimer = null; btn.classList.remove('on'); }
+  }, 600);
+}
+
+function show3DCode(phase) {
+  const el = document.getElementById('code3d');
+  if (phase === 'init') {
+    el.innerHTML = CODE.init_pp;
+  } else if (phase === 'assign') {
+    el.innerHTML = `<span class="comment"># 3D 和 2D 完全一样的代码</span>\n<span class="comment"># 距离计算自动适配任意维度 D</span>\n\n` + CODE.assign;
+  } else if (phase === 'update') {
+    el.innerHTML = `<span class="comment"># members.mean(axis=0) 对任意维度都适用</span>\n\n` + CODE.update;
+  } else if (phase === 'converge') {
+    el.innerHTML = CODE.converge;
+  }
+}
+
+function draw3D() {
+  const { ctx, W, H } = getCtx('canvas3d');
+  if (!data3d) return;
+
+  // Sort by z for painter's algorithm
+  const items = [];
+  data3d.forEach((p, i) => {
+    const pr = project3D(p, W, H);
+    items.push({ ...pr, idx: i, type: 'point' });
+  });
+  centers3d.forEach((p, k) => {
+    const pr = project3D(p, W, H);
+    items.push({ ...pr, idx: k, type: 'center' });
+  });
+  items.sort((a, b) => a.z - b.z);
+
+  items.forEach(pt => {
+    if (pt.type === 'center') {
+      const k = pt.idx;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = COLORS[k % COLORS.length];
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      const k = labels3d[pt.idx];
+      const r = Math.max(2, 3 * pt.s);
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = k >= 0 ? COLORS[k % COLORS.length] : '#555';
+      ctx.globalAlpha = k >= 0 ? 0.6 : 0.3;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  });
+
+  // Axes
+  const axes = [[140,0,0,'X','#e94560'],[0,140,0,'Y','#66bb6a'],[0,0,140,'Z','#4fc3f7']];
+  axes.forEach(([ax,ay,az,label,color]) => {
+    const o = project3D([0,0,0], W, H);
+    const e = project3D([ax,ay,az], W, H);
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.moveTo(o.x, o.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+    ctx.globalAlpha = 0.7;
+    ctx.fillStyle = color; ctx.font = '10px monospace'; ctx.fillText(label, e.x + 4, e.y - 4);
+    ctx.globalAlpha = 1;
+  });
+
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`迭代: ${Math.floor(step3dCount / 2)}`, 8, 16);
+  if (converged3d) { ctx.fillStyle = '#66bb6a'; ctx.fillText('✓ 收敛', 8, 32); }
+}
+
+// Mouse drag rotation
+(function() {
+  const c = document.getElementById('canvas3d');
+  function onDown(x, y) { isDragging = true; lastMouse = {x, y}; }
+  function onMove(x, y) {
+    if (!isDragging || !data3d) return;
+    rotY += (x - lastMouse.x) * 0.008;
+    rotX += (y - lastMouse.y) * 0.008;
+    lastMouse = {x, y};
+    draw3D();
+  }
+  function onUp() { isDragging = false; }
+  c.addEventListener('mousedown', e => onDown(e.clientX, e.clientY));
+  c.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+  c.addEventListener('mouseup', onUp);
+  c.addEventListener('mouseleave', onUp);
+  c.addEventListener('touchstart', e => { onDown(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
+  c.addEventListener('touchmove', e => { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive:false});
+  c.addEventListener('touchend', onUp);
+})();
+
+// ============================================================
+// Panel 3: Elbow Method
+// ============================================================
+function runElbow() {
+  const { ctx, W, H } = getCtx('elbowCanvas');
+
+  srand(42);
+  const pts = [];
+  const trueCenters = [[120,100],[350,300],[500,160]];
+  for (let i = 0; i < 200; i++) {
+    const tc = trueCenters[i % 3];
+    pts.push([tc[0]+randn()*45, tc[1]+randn()*45]);
+  }
+
+  const results = [];
+  for (let K = 1; K <= 8; K++) {
+    let bestWCSS = Infinity;
+    for (let run = 0; run < 5; run++) {
+      srand(run * 100 + K * 13);
+      let ctrs = kmeansInit(pts, K, 'kmeans++');
+      let lbls;
+      for (let it = 0; it < 80; it++) {
+        lbls = kmeansAssign(pts, ctrs);
+        ctrs = kmeansUpdate(pts, lbls, K, 2);
+      }
+      const w = computeWCSS(pts, lbls, ctrs);
+      bestWCSS = Math.min(bestWCSS, w);
+    }
+    results.push({k: K, wcss: bestWCSS});
+  }
+
+  const left = 70, right = W - 30, top = 50, bottom = H - 55;
+  const maxWCSS = results[0].wcss * 1.1;
+
+  // Grid
+  for (let y = 0; y <= 1; y += 0.2) {
+    const sy = bottom - y * (bottom - top);
+    ctx.strokeStyle = '#0f346033'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(left, sy); ctx.lineTo(right, sy); ctx.stroke();
+    ctx.fillStyle = '#555'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText((y * maxWCSS / 1000).toFixed(0) + 'k', left - 6, sy + 3);
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#888'; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('K (簇数)', (left + right) / 2, bottom + 38);
+  ctx.save(); ctx.translate(16, (top + bottom) / 2); ctx.rotate(-Math.PI/2);
+  ctx.fillText('WCSS', 0, 0); ctx.restore();
+
+  // Line
+  ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  results.forEach((r, i) => {
+    const x = left + (i / (results.length - 1)) * (right - left);
+    const y = bottom - (r.wcss / maxWCSS) * (bottom - top);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Points
+  results.forEach((r, i) => {
+    const x = left + (i / (results.length - 1)) * (right - left);
+    const y = bottom - (r.wcss / maxWCSS) * (bottom - top);
+    const isElbow = r.k === 3;
+
+    ctx.beginPath(); ctx.arc(x, y, isElbow ? 8 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = isElbow ? '#e94560' : '#4fc3f7';
+    ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+
+    ctx.fillStyle = isElbow ? '#e94560' : '#888';
+    ctx.font = isElbow ? 'bold 11px monospace' : '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`K=${r.k}`, x, bottom + 16);
+    ctx.font = '9px monospace';
+    ctx.fillText(`${(r.wcss/1000).toFixed(1)}k`, x, y - 12);
+
+    if (isElbow) {
+      ctx.fillStyle = '#e94560'; ctx.font = 'bold 11px monospace';
+      ctx.fillText('← 肘部 (Elbow)', x + 65, y + 4);
+      ctx.setLineDash([4, 4]); ctx.strokeStyle = '#e9456066'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, bottom); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  });
+
+  ctx.fillStyle = '#ccc'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('Elbow Method: K vs WCSS', W / 2, 28);
+
+  document.getElementById('elbowInfo').innerHTML =
+    `<b>原理</b>: WCSS 随 K 增大单调减小。到某个 K 后收益急剧下降 → "<span class="c-red">肘部</span>"。<br>` +
+    `真实簇数 = 3，<span class="c-red">K=3 处是拐点</span>。<br>` +
+    `代码: 对每个 K 跑多次 K-Means (避免局部最优)，取最小 WCSS。`;
+
+  document.getElementById('codeElbow').innerHTML = CODE.elbow;
+}
+
+// ============================================================
+// Init
+// ============================================================
+reset2D();
+showElbowCode();
+</script>
+</body>
+</html>

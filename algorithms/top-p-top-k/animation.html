@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Top-p & Top-k 采样 — 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:960px;margin:0 auto}
+  .panel.active{display:block}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls input[type=range]{width:140px;accent-color:#e94560}
+  .controls input[type=number]{width:60px;padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px;text-align:center}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  .bar-chart{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:16px;margin-top:10px}
+  .bar-row{display:flex;align-items:center;margin:4px 0;gap:8px}
+  .bar-label{width:50px;text-align:right;font-size:.8em;color:#aaa}
+  .bar-container{flex:1;height:22px;background:#0f346033;border-radius:4px;position:relative;overflow:hidden}
+  .bar-fill{height:100%;border-radius:4px;transition:width .4s ease,background .3s}
+  .bar-value{position:absolute;right:6px;top:2px;font-size:.72em;color:#ccc}
+  .bar-marker{position:absolute;top:0;bottom:0;width:2px;background:#ffd54f;z-index:2}
+
+  .cmp{width:100%;border-collapse:collapse;font-size:.82em;margin-top:12px}
+  .cmp th,.cmp td{padding:10px 12px;border:1px solid #0f3460;text-align:center}
+  .cmp th{background:#0f3460;color:#fff}
+  .cmp td{background:#16213e}
+</style>
+</head>
+<body>
+
+<h1>Top-p & Top-k 采样</h1>
+<p class="subtitle">LLM 解码策略 — 交互可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">Temperature</button>
+  <button class="tab-btn" onclick="switchTab(1)">Top-k</button>
+  <button class="tab-btn" onclick="switchTab(2)">Top-p (Nucleus)</button>
+  <button class="tab-btn" onclick="switchTab(3)">组合采样</button>
+</div>
+
+<!-- ============== Panel 1: Temperature ============== -->
+<div class="panel active" id="panel-0">
+  <div class="controls">
+    <label>Temperature T =</label>
+    <input type="range" id="tempSlider" min="0.1" max="3.0" step="0.1" value="1.0" oninput="drawTemp()">
+    <span id="tempVal" style="color:#e94560;font-weight:bold;min-width:40px">1.0</span>
+    <button onclick="document.getElementById('tempSlider').value=0.1;drawTemp()">T=0.1</button>
+    <button onclick="document.getElementById('tempSlider').value=1.0;drawTemp()">T=1.0</button>
+    <button onclick="document.getElementById('tempSlider').value=2.0;drawTemp()">T=2.0</button>
+  </div>
+  <div style="font-size:.8em;color:#888;margin-top:10px">原始 logits → softmax(logits / T) → 概率分布:</div>
+  <div class="bar-chart" id="tempBars"></div>
+  <div class="info-box" id="tempInfo"></div>
+</div>
+
+<!-- ============== Panel 2: Top-k ============== -->
+<div class="panel" id="panel-1">
+  <div class="controls">
+    <label>k =</label>
+    <input type="range" id="topkSlider" min="1" max="10" step="1" value="3" oninput="drawTopK()">
+    <span id="topkVal" style="color:#e94560;font-weight:bold;min-width:30px">3</span>
+    <button onclick="setLogitsMode('sharp');drawTopK()">尖锐分布</button>
+    <button onclick="setLogitsMode('flat');drawTopK()">平坦分布</button>
+    <button onclick="setLogitsMode('normal');drawTopK()">正常分布</button>
+  </div>
+  <div style="font-size:.8em;color:#888;margin-top:10px">Top-k: ���保留概率最大的前 <span id="topkLabel">3</span> 个 token:</div>
+  <div class="bar-chart" id="topkBars"></div>
+  <div class="info-box" id="topkInfo"></div>
+</div>
+
+<!-- ============== Panel 3: Top-p ============== -->
+<div class="panel" id="panel-2">
+  <div class="controls">
+    <label>p =</label>
+    <input type="range" id="toppSlider" min="0.1" max="1.0" step="0.05" value="0.9" oninput="drawTopP()">
+    <span id="toppVal" style="color:#e94560;font-weight:bold;min-width:40px">0.90</span>
+    <button onclick="setLogitsMode('sharp');drawTopP()">尖锐分布</button>
+    <button onclick="setLogitsMode('flat');drawTopP()">平坦分布</button>
+    <button onclick="setLogitsMode('normal');drawTopP()">正常分布</button>
+  </div>
+  <div style="font-size:.8em;color:#888;margin-top:10px">Top-p: 保留累积概率 ≥ p 的最小 token 集合:</div>
+  <div class="bar-chart" id="toppBars"></div>
+  <div style="margin-top:8px;font-size:.8em;color:#888">累积概率 (cumsum):</div>
+  <div class="bar-chart" id="toppCumBars"></div>
+  <div class="info-box" id="toppInfo"></div>
+</div>
+
+<!-- ============== Panel 4: Combined ============== -->
+<div class="panel" id="panel-3">
+  <div class="controls">
+    <label>T =</label>
+    <input type="range" id="cmbTemp" min="0.1" max="2.0" step="0.1" value="0.7" oninput="drawCombined()">
+    <span id="cmbTempVal" style="color:#ffd54f;min-width:30px">0.7</span>
+    <label>k =</label>
+    <input type="number" id="cmbK" value="5" min="0" max="10" onchange="drawCombined()">
+    <label>p =</label>
+    <input type="range" id="cmbP" min="0.1" max="1.0" step="0.05" value="0.9" oninput="drawCombined()">
+    <span id="cmbPVal" style="color:#4fc3f7;min-width:40px">0.90</span>
+    <button onclick="sample1000()">采样 1000 次</button>
+  </div>
+
+  <div style="display:flex;gap:12px;margin-top:10px">
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">流程: Temperature → Top-k → Top-p → Sample</div>
+      <div class="bar-chart" id="cmbBars"></div>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:4px">采样 1000 次的频率分布:</div>
+      <div class="bar-chart" id="sampleBars"></div>
+    </div>
+  </div>
+  <div class="info-box" id="cmbInfo"></div>
+</div>
+
+<script>
+// ============================================================
+// Global state
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+  if (i===0) drawTemp();
+  if (i===1) drawTopK();
+  if (i===2) drawTopP();
+  if (i===3) drawCombined();
+}
+
+// Token vocabulary
+const TOKENS = ['猫','狗','鱼','鸟','兔','蛇','鼠','虎','龙','马'];
+const COLORS = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a','#7e57c2','#8d6e63'];
+
+// Different logit distributions
+const LOGITS_PRESETS = {
+  normal: [5.0, 4.2, 3.0, 2.1, 1.5, 0.8, 0.3, -0.5, -1.0, -2.0],
+  sharp:  [8.0, 2.0, 1.0, 0.5, 0.1, -0.5, -1.0, -2.0, -3.0, -4.0],
+  flat:   [2.0, 1.9, 1.7, 1.6, 1.4, 1.3, 1.1, 1.0, 0.8, 0.5],
+};
+let logitsMode = 'normal';
+
+function setLogitsMode(mode) {
+  logitsMode = mode;
+}
+
+function getLogits() {
+  return [...LOGITS_PRESETS[logitsMode]];
+}
+
+// Softmax
+function softmax(logits) {
+  const maxL = Math.max(...logits);
+  const exps = logits.map(l => Math.exp(l - maxL));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / sum);
+}
+
+// Weighted random sample
+function sampleFrom(probs) {
+  let r = Math.random(), cum = 0;
+  for (let i = 0; i < probs.length; i++) {
+    cum += probs[i];
+    if (r <= cum) return i;
+  }
+  return probs.length - 1;
+}
+
+// ============================================================
+// Rendering helpers
+// ============================================================
+function renderBars(containerId, items) {
+  // items: [{label, value, displayValue, color, active, marker}]
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  const maxVal = Math.max(...items.map(it => it.value), 0.001);
+
+  items.forEach(it => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+
+    const label = document.createElement('div');
+    label.className = 'bar-label';
+    label.style.color = it.active !== false ? it.color : '#444';
+    label.textContent = it.label;
+    row.appendChild(label);
+
+    const barC = document.createElement('div');
+    barC.className = 'bar-container';
+
+    const fill = document.createElement('div');
+    fill.className = 'bar-fill';
+    fill.style.width = (it.value / maxVal * 100) + '%';
+    fill.style.background = it.active !== false ? it.color : '#333';
+    fill.style.opacity = it.active !== false ? 0.8 : 0.25;
+    barC.appendChild(fill);
+
+    const val = document.createElement('div');
+    val.className = 'bar-value';
+    val.textContent = it.displayValue || it.value.toFixed(3);
+    val.style.color = it.active !== false ? '#ccc' : '#444';
+    barC.appendChild(val);
+
+    if (it.marker != null) {
+      const mk = document.createElement('div');
+      mk.className = 'bar-marker';
+      mk.style.left = (it.marker / maxVal * 100) + '%';
+      barC.appendChild(mk);
+    }
+
+    row.appendChild(barC);
+    container.appendChild(row);
+  });
+}
+
+// ============================================================
+// Panel 1: Temperature
+// ============================================================
+function drawTemp() {
+  const T = parseFloat(document.getElementById('tempSlider').value);
+  document.getElementById('tempVal').textContent = T.toFixed(1);
+
+  const logits = getLogits();
+  const scaled = logits.map(l => l / T);
+  const probs = softmax(scaled);
+
+  const items = TOKENS.map((tok, i) => ({
+    label: tok,
+    value: probs[i],
+    displayValue: probs[i].toFixed(3) + ` (logit=${logits[i].toFixed(1)}/${T.toFixed(1)}=${scaled[i].toFixed(1)})`,
+    color: COLORS[i],
+    active: true,
+  }));
+  renderBars('tempBars', items);
+
+  const entropy = -probs.reduce((s, p) => s + (p > 0 ? p * Math.log2(p) : 0), 0);
+  const maxProb = Math.max(...probs);
+  let desc;
+  if (T < 0.5) desc = '非常尖锐 → 接近 greedy (argmax)';
+  else if (T < 1.0) desc = '偏尖锐 → 高概率 token 更突出';
+  else if (T === 1.0) desc = '标准 softmax → 正常分布';
+  else if (T < 2.0) desc = '偏平坦 → 低概率 token 获得更多机会';
+  else desc = '非常平坦 → 接近均匀分布，几乎完全随机';
+
+  document.getElementById('tempInfo').innerHTML =
+    `<b>T = ${T.toFixed(1)}</b>: ${desc}<br>` +
+    `公式: <span class="c-blue">p_i = softmax(logit_i / T)</span><br>` +
+    `Top-1 概率: <span class="c-red">${(maxProb*100).toFixed(1)}%</span> | ` +
+    `熵: <span class="c-green">${entropy.toFixed(2)} bits</span> (越高越随机，均匀分布=${Math.log2(TOKENS.length).toFixed(2)})`;
+}
+
+// ============================================================
+// Panel 2: Top-k
+// ============================================================
+function drawTopK() {
+  const k = parseInt(document.getElementById('topkSlider').value);
+  document.getElementById('topkVal').textContent = k;
+  document.getElementById('topkLabel').textContent = k;
+
+  const logits = getLogits();
+  const probs = softmax(logits);
+
+  // Sort by prob descending, get top-k indices
+  const indexed = probs.map((p, i) => ({p, i})).sort((a, b) => b.p - a.p);
+  const topkSet = new Set(indexed.slice(0, k).map(x => x.i));
+
+  // Filter: top-k keep, rest → 0
+  const filtered = probs.map((p, i) => topkSet.has(i) ? p : 0);
+  const filteredSum = filtered.reduce((a, b) => a + b, 0);
+  const renormed = filtered.map(p => p / filteredSum);
+
+  const items = TOKENS.map((tok, i) => ({
+    label: tok,
+    value: renormed[i],
+    displayValue: topkSet.has(i) ?
+      `${renormed[i].toFixed(3)} (原: ${probs[i].toFixed(3)})` :
+      `已过滤 (原: ${probs[i].toFixed(3)})`,
+    color: COLORS[i],
+    active: topkSet.has(i),
+  }));
+  renderBars('topkBars', items);
+
+  const keptNames = indexed.slice(0, k).map(x => TOKENS[x.i]).join(', ');
+  const removedNames = indexed.slice(k).map(x => TOKENS[x.i]).join(', ');
+  document.getElementById('topkInfo').innerHTML =
+    `<b>Top-${k}</b>: 保留 <span class="c-green">[${keptNames}]</span>，过滤 <span style="color:#555">[${removedNames}]</span><br>` +
+    `<b>问题</b>: k 是固定的 → 分布尖锐时 k=${k} 可能包含太多无意义 token，分布平坦时可能不够<br>` +
+    `当前分布类型: <span class="c-yellow">${logitsMode === 'sharp' ? '尖锐' : logitsMode === 'flat' ? '平坦' : '正常'}</span>` +
+    ` — 尝试切换分布看 Top-k 的固定性问题！`;
+}
+
+// ============================================================
+// Panel 3: Top-p
+// ============================================================
+function drawTopP() {
+  const p = parseFloat(document.getElementById('toppSlider').value);
+  document.getElementById('toppVal').textContent = p.toFixed(2);
+
+  const logits = getLogits();
+  const probs = softmax(logits);
+
+  // Sort descending
+  const indexed = probs.map((pr, i) => ({p: pr, i})).sort((a, b) => b.p - a.p);
+
+  // Cumulative sum
+  let cumsum = 0;
+  let cutoffIdx = indexed.length;
+  const cumsums = [];
+  for (let j = 0; j < indexed.length; j++) {
+    cumsum += indexed[j].p;
+    cumsums.push(cumsum);
+    if (cumsum >= p && cutoffIdx === indexed.length) {
+      cutoffIdx = j + 1;  // include this one
+    }
+  }
+
+  const topPSet = new Set(indexed.slice(0, cutoffIdx).map(x => x.i));
+
+  // Renormalize
+  const filtered = probs.map((pr, i) => topPSet.has(i) ? pr : 0);
+  const filteredSum = filtered.reduce((a, b) => a + b, 0);
+  const renormed = filtered.map(pr => pr / filteredSum);
+
+  // Probability bars
+  const items = TOKENS.map((tok, i) => ({
+    label: tok,
+    value: renormed[i],
+    displayValue: topPSet.has(i) ?
+      `${renormed[i].toFixed(3)} (原: ${probs[i].toFixed(3)})` :
+      `已过滤 (原: ${probs[i].toFixed(3)})`,
+    color: COLORS[i],
+    active: topPSet.has(i),
+  }));
+  renderBars('toppBars', items);
+
+  // Cumsum bars (sorted order)
+  const cumItems = indexed.map((x, j) => ({
+    label: TOKENS[x.i],
+    value: cumsums[j],
+    displayValue: `cumsum=${cumsums[j].toFixed(3)} (prob=${x.p.toFixed(3)})`,
+    color: j < cutoffIdx ? COLORS[x.i] : '#333',
+    active: j < cutoffIdx,
+    marker: p,  // show p threshold
+  }));
+  renderBars('toppCumBars', cumItems);
+
+  document.getElementById('toppInfo').innerHTML =
+    `<b>Top-p = ${p.toFixed(2)}</b>: 候选集大小 = <span class="c-red">${cutoffIdx}</span> 个 token (自适应!)<br>` +
+    `保留: <span class="c-green">[${indexed.slice(0, cutoffIdx).map(x => TOKENS[x.i]).join(', ')}]</span><br>` +
+    `黄线 = p 阈值。cumsum 达到黄线处截断。<br>` +
+    `<b>vs Top-k</b>: 分布尖锐时候选集自动变小，分布平坦时自动变大 → ` +
+    `<span class="c-green">试试切换"尖锐/平坦分布"看效果！</span>`;
+}
+
+// ============================================================
+// Panel 4: Combined
+// ============================================================
+let sampleCounts = null;
+
+function drawCombined() {
+  const T = parseFloat(document.getElementById('cmbTemp').value);
+  const k = parseInt(document.getElementById('cmbK').value);
+  const p = parseFloat(document.getElementById('cmbP').value);
+  document.getElementById('cmbTempVal').textContent = T.toFixed(1);
+  document.getElementById('cmbPVal').textContent = p.toFixed(2);
+
+  const logits = getLogits();
+
+  // Step 1: Temperature
+  const scaled = logits.map(l => l / T);
+
+  // Step 2: Top-k
+  let afterK = [...scaled];
+  if (k > 0 && k < TOKENS.length) {
+    const sorted = [...scaled].sort((a, b) => b - a);
+    const threshold = sorted[k - 1];
+    afterK = scaled.map(l => l >= threshold ? l : -Infinity);
+  }
+
+  // Step 3: Top-p
+  let afterP = [...afterK];
+  if (p < 1.0) {
+    const probs = softmax(afterK);
+    const indexed = probs.map((pr, i) => ({p: pr, i})).sort((a, b) => b.p - a.p);
+    let cumsum = 0, cutoff = indexed.length;
+    for (let j = 0; j < indexed.length; j++) {
+      cumsum += indexed[j].p;
+      if (cumsum >= p && cutoff === indexed.length) cutoff = j + 1;
+    }
+    const keepSet = new Set(indexed.slice(0, cutoff).map(x => x.i));
+    afterP = afterK.map((l, i) => keepSet.has(i) ? l : -Infinity);
+  }
+
+  // Final probs
+  const finalProbs = softmax(afterP);
+
+  const items = TOKENS.map((tok, i) => ({
+    label: tok,
+    value: finalProbs[i],
+    displayValue: finalProbs[i] > 0.001 ?
+      `${finalProbs[i].toFixed(3)}` : 'filtered',
+    color: COLORS[i],
+    active: finalProbs[i] > 0.001,
+  }));
+  renderBars('cmbBars', items);
+
+  // Show sample counts if available
+  if (sampleCounts) {
+    const total = sampleCounts.reduce((a, b) => a + b, 0);
+    const sampleItems = TOKENS.map((tok, i) => ({
+      label: tok,
+      value: sampleCounts[i] / total,
+      displayValue: `${sampleCounts[i]} 次 (${(sampleCounts[i]/total*100).toFixed(1)}%)`,
+      color: COLORS[i],
+      active: sampleCounts[i] > 0,
+    }));
+    renderBars('sampleBars', sampleItems);
+  }
+
+  const activeCount = finalProbs.filter(p => p > 0.001).length;
+  document.getElementById('cmbInfo').innerHTML =
+    `<b>流程</b>: logits → <span class="c-yellow">÷T=${T.toFixed(1)}</span> → ` +
+    `<span class="c-red">Top-k=${k}</span> → <span class="c-blue">Top-p=${p.toFixed(2)}</span> → Sample<br>` +
+    `最终候选集: <span class="c-green">${activeCount}</span> 个 token<br>` +
+    `点击「采样 1000 次」看实际分布是否匹配理论概率。`;
+}
+
+function sample1000() {
+  const T = parseFloat(document.getElementById('cmbTemp').value);
+  const k = parseInt(document.getElementById('cmbK').value);
+  const p = parseFloat(document.getElementById('cmbP').value);
+  const logits = getLogits();
+
+  sampleCounts = new Array(TOKENS.length).fill(0);
+
+  for (let trial = 0; trial < 1000; trial++) {
+    // Temperature
+    const scaled = logits.map(l => l / T);
+
+    // Top-k
+    let afterK = [...scaled];
+    if (k > 0 && k < TOKENS.length) {
+      const sorted = [...scaled].sort((a, b) => b - a);
+      const threshold = sorted[k - 1];
+      afterK = scaled.map(l => l >= threshold ? l : -Infinity);
+    }
+
+    // Top-p
+    let afterP = [...afterK];
+    if (p < 1.0) {
+      const probs = softmax(afterK);
+      const indexed = probs.map((pr, i) => ({p: pr, i})).sort((a, b) => b.p - a.p);
+      let cumsum = 0, cutoff = indexed.length;
+      for (let j = 0; j < indexed.length; j++) {
+        cumsum += indexed[j].p;
+        if (cumsum >= p && cutoff === indexed.length) cutoff = j + 1;
+      }
+      const keepSet = new Set(indexed.slice(0, cutoff).map(x => x.i));
+      afterP = afterK.map((l, i) => keepSet.has(i) ? l : -Infinity);
+    }
+
+    const finalProbs = softmax(afterP);
+    const idx = sampleFrom(finalProbs);
+    sampleCounts[idx]++;
+  }
+
+  drawCombined();
+}
+
+// ============================================================
+// Init
+// ============================================================
+drawTemp();
+</script>
+</body>
+</html>
