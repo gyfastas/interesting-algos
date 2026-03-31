@@ -22,6 +22,8 @@
 | 014 | [K-Means 聚类](./algorithms/k-means/) | 无监督学习、聚类算法 | ⭐ |
 | 015 | [快速排序](./algorithms/quick-sort/) | 排序、分治、Partition | ⭐⭐ |
 | 016 | [多元线性回归](./algorithms/linear-regression/) | 梯度下降、Forward & Backward | ⭐ |
+| 017 | [VLM DataLoader](./algorithms/vlm-dataloader/) | 多进程、生产者-消费者队列 | ⭐⭐ |
+| 018 | [VLM 训练流水线](./algorithms/vlm-training-pipeline/) | ViT 全量+LLM Micro-Batch+Recompute | ⭐⭐⭐ |
 
 ## 目录结构
 

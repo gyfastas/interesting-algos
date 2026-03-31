@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VLM DataLoader — 多进程可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.5em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.88em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:1100px;margin:0 auto}
+  .panel.active{display:block}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls select,.controls input[type=number]{padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+
+  .main-area{display:flex;gap:14px;align-items:flex-start}
+  .code-panel{min-width:260px;max-width:340px}
+  .code-block{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;font-size:.72em;line-height:1.7;overflow-x:auto;white-space:pre;max-height:560px;overflow-y:auto}
+  .code-block .hl{background:#e9456033;display:inline;border-radius:2px}
+  .code-block .comment{color:#555}
+  .code-block .kw{color:#ab47bc}
+  .code-block .fn{color:#4fc3f7}
+  .code-block .num{color:#ffd54f}
+  .code-block .str{color:#66bb6a}
+  .code-title{font-size:.8em;color:#888;margin-bottom:6px}
+
+  canvas{display:block;border:1px solid #0f3460;border-radius:8px;background:#0d1b2a}
+
+  .timeline{background:#0d1b2a;border:1px solid #0f3460;border-radius:8px;padding:12px;margin-top:10px;overflow-x:auto}
+  .tl-row{display:flex;align-items:center;margin:3px 0;height:22px}
+  .tl-label{width:70px;font-size:.72em;color:#888;flex-shrink:0;text-align:right;padding-right:8px}
+  .tl-bar{height:18px;border-radius:3px;margin:0 1px;display:inline-block;font-size:.6em;line-height:18px;text-align:center;color:#fff;min-width:4px;transition:width .2s}
+</style>
+</head>
+<body>
+
+<h1>VLM DataLoader</h1>
+<p class="subtitle">多进程生产者-消费者 — 数据加载流水线可视化</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">流水线动画</button>
+  <button class="tab-btn" onclick="switchTab(1)">串行 vs 并行</button>
+  <button class="tab-btn" onclick="switchTab(2)">Queue 机制</button>
+</div>
+
+<!-- ============== Panel 1: Pipeline Animation ============== -->
+<div class="panel active" id="panel-0">
+  <div class="main-area">
+    <div style="flex:1">
+      <canvas id="pipeCanvas" width="680" height="480"></canvas>
+      <div class="controls">
+        <label>Workers:</label>
+        <select id="numWorkers" onchange="resetPipe()">
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="4" selected>4</option>
+        </select>
+        <label>Batch:</label>
+        <select id="batchSize">
+          <option value="4" selected>4</option>
+          <option value="8">8</option>
+        </select>
+        <label>Prefetch:</label>
+        <select id="prefetch">
+          <option value="1">1</option>
+          <option value="2" selected>2</option>
+          <option value="4">4</option>
+        </select>
+        <button onclick="resetPipe()">重置</button>
+        <button id="pipeAutoBtn" onclick="autoPipe()">运行</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title" id="pipeCodeTitle">solution.py — 架构</div>
+      <div class="code-block" id="pipeCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="pipeInfo">
+    点击「运行」观察多进程数据加载的实时流水线。Workers 并行读图，Queue 缓冲，主进程 collate 后送 GPU。
+  </div>
+</div>
+
+<!-- ============== Panel 2: Serial vs Parallel ============== -->
+<div class="panel" id="panel-1">
+  <div class="main-area">
+    <div style="flex:1">
+      <div style="font-size:.8em;color:#888;margin-bottom:6px">时间线对比 (加载 16 条数据, batch_size=4):</div>
+      <div class="timeline" id="serialTimeline">
+        <div style="font-size:.75em;color:#e94560;margin-bottom:6px;font-weight:bold">串行 DataLoader</div>
+      </div>
+      <div class="timeline" id="parallelTimeline" style="margin-top:8px">
+        <div style="font-size:.75em;color:#66bb6a;margin-bottom:6px;font-weight:bold">多进程 DataLoader (4 workers)</div>
+      </div>
+      <canvas id="cmpCanvas" width="680" height="240" style="margin-top:10px"></canvas>
+      <div class="controls">
+        <button onclick="runComparison()">运行对比</button>
+        <label>图像 decode 时间:</label>
+        <select id="decodeTime">
+          <option value="10">10ms (小图)</option>
+          <option value="30" selected>30ms (中图)</option>
+          <option value="80">80ms (大图/视频帧)</option>
+        </select>
+        <label>GPU 训练时间:</label>
+        <select id="gpuTime">
+          <option value="50">50ms</option>
+          <option value="100" selected>100ms</option>
+          <option value="200">200ms</option>
+        </select>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">串行 vs 多进程 代码对比</div>
+      <div class="code-block" id="cmpCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="cmpInfo">
+    点击「运行对比」看串行和多进程的时间线差异。关键指标: <b>GPU 利用率</b>。
+  </div>
+</div>
+
+<!-- ============== Panel 3: Queue Mechanism ============== -->
+<div class="panel" id="panel-2">
+  <div class="main-area">
+    <div style="flex:1">
+      <canvas id="queueCanvas" width="680" height="460"></canvas>
+      <div class="controls">
+        <button onclick="resetQueue()">重置</button>
+        <button onclick="stepQueue()">下一步</button>
+        <button id="queueAutoBtn" onclick="autoQueue()">自动</button>
+      </div>
+    </div>
+    <div class="code-panel">
+      <div class="code-title">solution.py — Queue + Poison Pill</div>
+      <div class="code-block" id="queueCode"></div>
+    </div>
+  </div>
+  <div class="info-box" id="queueInfo">
+    逐步展示: index_queue 分发索引 → workers 处理 → output_queue 缓冲 → 主进程消费 → 毒丸关闭。
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Globals
+// ============================================================
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+  if (i===1) { showCmpCode(); }
+  if (i===2 && !queueState) resetQueue();
+}
+
+const DPR = Math.min(devicePixelRatio, 2);
+const canvasCache = {};
+function getCtx(id) {
+  if (!canvasCache[id]) {
+    const c = document.getElementById(id);
+    const w = +c.getAttribute('width'), h = +c.getAttribute('height');
+    c.width = w * DPR; c.height = h * DPR;
+    c.style.width = w + 'px'; c.style.height = h + 'px';
+    const ctx = c.getContext('2d');
+    ctx.scale(DPR, DPR);
+    canvasCache[id] = { ctx, W: w, H: h };
+  }
+  const cc = canvasCache[id];
+  cc.ctx.save();
+  cc.ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  cc.ctx.clearRect(0, 0, cc.W, cc.H);
+  cc.ctx.restore();
+  return cc;
+}
+
+const COLORS = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a'];
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke) {
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.5;ctx.stroke();}
+}
+
+// ============================================================
+// Panel 1: Pipeline Animation
+// ============================================================
+let pipeState, pipeTimer;
+
+function resetPipe() {
+  if (pipeTimer) { clearInterval(pipeTimer); pipeTimer = null; document.getElementById('pipeAutoBtn').classList.remove('on'); }
+  const nw = +document.getElementById('numWorkers').value;
+  const bs = +document.getElementById('batchSize').value;
+  const pf = +document.getElementById('prefetch').value;
+
+  pipeState = {
+    nw, bs, pf,
+    tick: 0,
+    totalSamples: 24,
+    indexQueue: [],       // indices waiting to be picked up
+    workers: Array.from({length: nw}, () => ({ busy: false, item: -1, progress: 0 })),
+    outputQueue: [],      // processed samples waiting in queue
+    batchBuffer: [],      // current batch being assembled
+    gpuBusy: false,
+    gpuProgress: 0,
+    batchesDone: 0,
+    nextIdx: 0,
+    phase: 'filling',     // filling, running, draining, done
+    log: [],
+  };
+
+  // Fill index queue
+  for (let i = 0; i < pipeState.totalSamples; i++) {
+    pipeState.indexQueue.push(i);
+  }
+
+  drawPipe();
+  showPipeCode('init');
+}
+
+function autoPipe() {
+  const btn = document.getElementById('pipeAutoBtn');
+  if (pipeTimer) { clearInterval(pipeTimer); pipeTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!pipeState) resetPipe();
+  pipeTimer = setInterval(() => {
+    tickPipe();
+    drawPipe();
+    if (pipeState.phase === 'done') { clearInterval(pipeTimer); pipeTimer = null; btn.classList.remove('on'); }
+  }, 200);
+}
+
+function tickPipe() {
+  const s = pipeState;
+
+  // 1. Workers pick up work from index queue
+  s.workers.forEach((w, wi) => {
+    if (!w.busy && s.indexQueue.length > 0) {
+      w.item = s.indexQueue.shift();
+      w.busy = true;
+      w.progress = 0;
+      s.log.push(`Worker${wi} 开始处理 #${w.item}`);
+    }
+  });
+
+  // 2. Workers process (takes 3 ticks to simulate decode)
+  s.workers.forEach((w, wi) => {
+    if (w.busy) {
+      w.progress++;
+      if (w.progress >= 3) {
+        // Done, put into output queue if not full
+        if (s.outputQueue.length < s.pf * s.bs) {
+          s.outputQueue.push(w.item);
+          s.log.push(`Worker${wi} 完成 #${w.item} → output_queue`);
+          w.busy = false;
+          w.item = -1;
+        }
+        // else: blocked, queue full
+      }
+    }
+  });
+
+  // 3. Main process: take from output queue into batch buffer
+  while (s.outputQueue.length > 0 && s.batchBuffer.length < s.bs) {
+    const item = s.outputQueue.shift();
+    s.batchBuffer.push(item);
+  }
+
+  // 4. If batch full and GPU not busy → start GPU
+  if (s.batchBuffer.length >= s.bs && !s.gpuBusy) {
+    s.gpuBusy = true;
+    s.gpuProgress = 0;
+    s.batchBuffer = [];
+    s.log.push(`Batch #${s.batchesDone} collate → GPU`);
+    showPipeCode('collate');
+  }
+
+  // 5. GPU processing
+  if (s.gpuBusy) {
+    s.gpuProgress++;
+    if (s.gpuProgress >= 4) {
+      s.gpuBusy = false;
+      s.batchesDone++;
+      s.log.push(`Batch #${s.batchesDone - 1} GPU 训练完成`);
+    }
+  }
+
+  // 6. Check done
+  const allWorkersDone = s.workers.every(w => !w.busy);
+  if (s.indexQueue.length === 0 && allWorkersDone && s.outputQueue.length === 0 && s.batchBuffer.length === 0 && !s.gpuBusy) {
+    s.phase = 'done';
+  }
+
+  s.tick++;
+}
+
+function drawPipe() {
+  const { ctx, W, H } = getCtx('pipeCanvas');
+  const s = pipeState;
+  if (!s) return;
+
+  const cx = W / 2;
+
+  // Title
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`多进程 DataLoader Pipeline (tick ${s.tick})`, cx, 20);
+
+  // === Index Queue (top) ===
+  const iqY = 45, iqH = 30;
+  roundRect(ctx, 40, iqY, 200, iqH, 6, '#16213e', '#0f3460');
+  ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`index_queue [${s.indexQueue.length}]`, 46, iqY + 12);
+  // Show items
+  s.indexQueue.slice(0, 12).forEach((idx, i) => {
+    ctx.fillStyle = '#4fc3f744'; ctx.fillRect(46 + i * 16, iqY + 16, 14, 10);
+    ctx.fillStyle = '#4fc3f7'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(idx, 53 + i * 16, iqY + 25);
+  });
+  if (s.indexQueue.length > 12) {
+    ctx.fillStyle = '#555'; ctx.fillText('...', 46 + 12 * 16 + 8, iqY + 25);
+  }
+
+  // Arrow down
+  ctx.fillStyle = '#4fc3f7'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('↓', 140, iqY + iqH + 14);
+
+  // === Workers ===
+  const wStartY = iqY + iqH + 28;
+  const wH = 50, wW = 130, wGap = 10;
+  const totalWH = s.nw * (wH + wGap);
+  const wX = 40;
+
+  s.workers.forEach((w, wi) => {
+    const wy = wStartY + wi * (wH + wGap);
+    const color = COLORS[wi % COLORS.length];
+    const fill = w.busy ? color + '22' : '#16213e';
+    roundRect(ctx, wX, wy, wW, wH, 6, fill, color);
+
+    ctx.fillStyle = color; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(`Worker ${wi}`, wX + 8, wy + 16);
+
+    if (w.busy) {
+      ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+      ctx.fillText(`处理 #${w.item}`, wX + 8, wy + 30);
+      // Progress bar
+      const pbW = wW - 16, pbH = 6;
+      ctx.fillStyle = '#0d1b2a';
+      ctx.fillRect(wX + 8, wy + 36, pbW, pbH);
+      ctx.fillStyle = color;
+      ctx.fillRect(wX + 8, wy + 36, pbW * (w.progress / 3), pbH);
+    } else {
+      ctx.fillStyle = '#555'; ctx.font = '9px monospace';
+      ctx.fillText('空闲', wX + 8, wy + 32);
+    }
+  });
+
+  // Arrow right from workers → output queue
+  const arrowX = wX + wW + 15;
+  const arrowY = wStartY + totalWH / 2 - 5;
+  ctx.fillStyle = '#ffd54f'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('→', arrowX, arrowY);
+
+  // === Output Queue ===
+  const oqX = arrowX + 25, oqY = wStartY, oqW = 120, oqH = totalWH - wGap;
+  const maxQSize = s.pf * s.bs;
+  roundRect(ctx, oqX, oqY, oqW, oqH, 6, '#16213e', '#ffd54f');
+  ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`output_queue`, oqX + oqW / 2, oqY + 14);
+  ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+  ctx.fillText(`${s.outputQueue.length}/${maxQSize}`, oqX + oqW / 2, oqY + 26);
+
+  // Queue fill visualization
+  const qBarH = oqH - 38;
+  ctx.fillStyle = '#0d1b2a';
+  ctx.fillRect(oqX + 10, oqY + 32, oqW - 20, qBarH);
+  const fillH = (s.outputQueue.length / maxQSize) * qBarH;
+  const fillColor = s.outputQueue.length >= maxQSize ? '#e94560' : '#ffd54f';
+  ctx.fillStyle = fillColor + '66';
+  ctx.fillRect(oqX + 10, oqY + 32 + qBarH - fillH, oqW - 20, fillH);
+
+  // Show items in queue
+  s.outputQueue.forEach((idx, i) => {
+    if (i > 7) return;
+    const iy = oqY + 34 + i * 16;
+    ctx.fillStyle = '#ffd54f'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`#${idx} ✓`, oqX + oqW / 2, iy + 10);
+  });
+
+  // Arrow right → main process
+  const a2X = oqX + oqW + 15;
+  ctx.fillStyle = '#66bb6a'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('→', a2X, arrowY);
+
+  // === Main Process (Collate + GPU) ===
+  const mpX = a2X + 25, mpW = 200;
+
+  // Batch buffer
+  const bbY = oqY;
+  roundRect(ctx, mpX, bbY, mpW, 60, 6, '#16213e', '#66bb6a');
+  ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`Batch Buffer [${s.batchBuffer.length}/${s.bs}]`, mpX + 8, bbY + 16);
+  s.batchBuffer.forEach((idx, i) => {
+    ctx.fillStyle = '#66bb6a44'; ctx.fillRect(mpX + 8 + i * 22, bbY + 24, 20, 20);
+    ctx.fillStyle = '#66bb6a'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`#${idx}`, mpX + 18 + i * 22, bbY + 38);
+  });
+
+  // collate arrow
+  ctx.fillStyle = '#66bb6a'; ctx.font = '12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('↓ collate', mpX + mpW / 2, bbY + 72);
+
+  // GPU
+  const gpuY = bbY + 80;
+  const gpuFill = s.gpuBusy ? '#e9456033' : '#16213e';
+  roundRect(ctx, mpX, gpuY, mpW, 70, 6, gpuFill, s.gpuBusy ? '#e94560' : '#0f3460');
+  ctx.fillStyle = s.gpuBusy ? '#e94560' : '#555'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('GPU', mpX + mpW / 2, gpuY + 20);
+
+  if (s.gpuBusy) {
+    ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+    ctx.fillText(`训练 Batch #${s.batchesDone}...`, mpX + mpW / 2, gpuY + 36);
+    // Progress
+    const pbW = mpW - 30;
+    ctx.fillStyle = '#0d1b2a'; ctx.fillRect(mpX + 15, gpuY + 46, pbW, 8);
+    ctx.fillStyle = '#e94560'; ctx.fillRect(mpX + 15, gpuY + 46, pbW * (s.gpuProgress / 4), 8);
+  } else {
+    ctx.fillStyle = '#555'; ctx.font = '9px monospace';
+    ctx.fillText(s.phase === 'done' ? '完成!' : '等待数据...', mpX + mpW / 2, gpuY + 40);
+  }
+
+  // Stats
+  const stY = gpuY + 85;
+  ctx.fillStyle = '#888'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`Batches 完成: ${s.batchesDone}`, mpX, stY);
+  ctx.fillText(`剩余索引: ${s.indexQueue.length}`, mpX, stY + 16);
+  ctx.fillText(`GPU 利用率: ${s.tick > 0 ? ((s.batchesDone * 4 / s.tick) * 100).toFixed(0) : 0}%`, mpX, stY + 32);
+
+  // Info
+  const totalBatches = Math.floor(s.totalSamples / s.bs);
+  document.getElementById('pipeInfo').innerHTML =
+    `<b>Tick ${s.tick}</b> | Workers: ${s.nw} | Batch: ${s.bs} | Prefetch: ${s.pf} | ` +
+    `完成: ${s.batchesDone}/${totalBatches} batches` +
+    (s.phase === 'done' ? ' | <span class="c-green">全部完成!</span>' : '') +
+    `<br>` + (s.log.length > 0 ? `最新: ${s.log[s.log.length - 1]}` : '');
+}
+
+function showPipeCode(phase) {
+  const el = document.getElementById('pipeCode');
+  if (phase === 'init') {
+    el.innerHTML = `<span class="comment"># solution.py — VLMDataLoader 架构</span>
+
+<span class="kw">class</span> <span class="fn">VLMDataLoader</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, ...):
+<span class="hl">        <span class="comment"># 两个 Queue</span>
+        self.index_queue = mp.Queue()
+        self.output_queue = mp.Queue(
+            maxsize=prefetch * batch_size
+        )
+
+        <span class="comment"># 启动 worker 进程</span>
+        self.workers = [
+            mp.Process(
+                target=worker_fn,
+                args=(wid, dataset,
+                      self.index_queue,
+                      self.output_queue)
+            )
+            <span class="kw">for</span> wid <span class="kw">in</span> range(num_workers)
+        ]</span>
+
+<span class="comment"># Worker (生产者):</span>
+<span class="kw">def</span> <span class="fn">worker_fn</span>(wid, dataset, idx_q, out_q):
+    <span class="kw">while</span> True:
+        idx = idx_q.get()
+<span class="hl">        <span class="kw">if</span> idx <span class="kw">is</span> None:  <span class="comment"># 毒丸</span>
+            <span class="kw">break</span>
+        sample = dataset[idx]
+        out_q.put(sample)</span>`;
+  } else if (phase === 'collate') {
+    el.innerHTML = `<span class="comment"># solution.py — Collate 函数</span>
+
+<span class="kw">def</span> <span class="fn">vlm_collate</span>(samples):
+<span class="hl">    <span class="comment"># 图像: stack (B, 3, H, W)</span>
+    images = torch.stack(
+        [s[<span class="str">"image"</span>] <span class="kw">for</span> s <span class="kw">in</span> samples]
+    )
+
+    <span class="comment"># 文本: pad 到 batch 内最长</span>
+    max_len = max(len(s[<span class="str">"input_ids"</span>])
+                  <span class="kw">for</span> s <span class="kw">in</span> samples)
+
+    input_ids = torch.zeros(B, max_len)
+    labels = torch.full((B, max_len), <span class="num">-100</span>)
+
+    <span class="kw">for</span> i, s <span class="kw">in</span> enumerate(samples):
+        seq_len = len(s[<span class="str">"input_ids"</span>])
+        input_ids[i, :seq_len] = s[<span class="str">"input_ids"</span>]
+        labels[i, :seq_len] = s[<span class="str">"labels"</span>]</span>
+
+    <span class="kw">return</span> {
+        <span class="str">"images"</span>: images,
+        <span class="str">"input_ids"</span>: input_ids,
+        <span class="str">"labels"</span>: labels,  <span class="comment"># -100=ignore</span>
+    }`;
+  }
+}
+
+// ============================================================
+// Panel 2: Serial vs Parallel comparison
+// ============================================================
+function runComparison() {
+  const decodeMs = +document.getElementById('decodeTime').value;
+  const gpuMs = +document.getElementById('gpuTime').value;
+  const N = 16, bs = 4, nw = 4;
+  const nBatches = N / bs;
+
+  // Serial timeline
+  const serialEl = document.getElementById('serialTimeline');
+  serialEl.innerHTML = '<div style="font-size:.75em;color:#e94560;margin-bottom:6px;font-weight:bold">串行 DataLoader</div>';
+
+  let serialTotal = 0;
+  let serialGpuTime = 0;
+
+  for (let b = 0; b < nBatches; b++) {
+    const row = document.createElement('div');
+    row.className = 'tl-row';
+
+    const label = document.createElement('div');
+    label.className = 'tl-label';
+    label.textContent = `Batch ${b}`;
+    row.appendChild(label);
+
+    const barArea = document.createElement('div');
+    barArea.style.cssText = 'display:flex;flex:1';
+
+    // Load phase (serial: bs * decodeMs)
+    const loadTime = bs * decodeMs;
+    const loadBar = document.createElement('div');
+    loadBar.className = 'tl-bar';
+    loadBar.style.cssText = `width:${loadTime * 0.8}px;background:#ffd54f`;
+    loadBar.textContent = `加载 ${loadTime}ms`;
+    barArea.appendChild(loadBar);
+
+    // GPU phase
+    const gpuBar = document.createElement('div');
+    gpuBar.className = 'tl-bar';
+    gpuBar.style.cssText = `width:${gpuMs * 0.8}px;background:#e94560`;
+    gpuBar.textContent = `GPU ${gpuMs}ms`;
+    barArea.appendChild(gpuBar);
+
+    serialTotal += loadTime + gpuMs;
+    serialGpuTime += gpuMs;
+    row.appendChild(barArea);
+    serialEl.appendChild(row);
+  }
+
+  // Parallel timeline
+  const parallelEl = document.getElementById('parallelTimeline');
+  parallelEl.innerHTML = '<div style="font-size:.75em;color:#66bb6a;margin-bottom:6px;font-weight:bold">多进程 DataLoader (4 workers)</div>';
+
+  let parallelTotal = 0;
+  const loadTimeParallel = Math.ceil(bs / nw) * decodeMs; // parallel load
+  const firstLoadTime = loadTimeParallel; // first batch must wait
+
+  // Workers row
+  const wRow = document.createElement('div');
+  wRow.className = 'tl-row';
+  const wLabel = document.createElement('div');
+  wLabel.className = 'tl-label';
+  wLabel.textContent = 'Workers';
+  wRow.appendChild(wLabel);
+  const wBarArea = document.createElement('div');
+  wBarArea.style.cssText = 'display:flex;flex:1;flex-wrap:wrap';
+  for (let b = 0; b < nBatches; b++) {
+    const bar = document.createElement('div');
+    bar.className = 'tl-bar';
+    bar.style.cssText = `width:${loadTimeParallel * 0.8}px;background:${COLORS[b % COLORS.length]}44;border:1px solid ${COLORS[b % COLORS.length]}`;
+    bar.textContent = `B${b}`;
+    wBarArea.appendChild(bar);
+  }
+  wRow.appendChild(wBarArea);
+  parallelEl.appendChild(wRow);
+
+  // GPU row
+  const gRow = document.createElement('div');
+  gRow.className = 'tl-row';
+  const gLabel = document.createElement('div');
+  gLabel.className = 'tl-label';
+  gLabel.textContent = 'GPU';
+  gRow.appendChild(gLabel);
+  const gBarArea = document.createElement('div');
+  gBarArea.style.cssText = 'display:flex;flex:1';
+
+  // First batch: wait for load
+  const waitBar = document.createElement('div');
+  waitBar.className = 'tl-bar';
+  waitBar.style.cssText = `width:${firstLoadTime * 0.8}px;background:#333`;
+  waitBar.textContent = '等待';
+  gBarArea.appendChild(waitBar);
+
+  for (let b = 0; b < nBatches; b++) {
+    const gpuBar = document.createElement('div');
+    gpuBar.className = 'tl-bar';
+    gpuBar.style.cssText = `width:${gpuMs * 0.8}px;background:#66bb6a`;
+    gpuBar.textContent = `GPU`;
+    gBarArea.appendChild(gpuBar);
+  }
+  gRow.appendChild(gBarArea);
+  parallelEl.appendChild(gRow);
+
+  // Parallel total = first load + nBatches * max(loadTimeParallel, gpuMs)
+  // (pipeline: load and GPU overlap after first batch)
+  parallelTotal = firstLoadTime + nBatches * Math.max(loadTimeParallel, gpuMs);
+  // More accurate: first load + (nBatches-1)*max(load, gpu) + gpuMs
+  parallelTotal = firstLoadTime + (nBatches - 1) * Math.max(loadTimeParallel, gpuMs) + gpuMs;
+
+  // Draw comparison bar chart
+  const { ctx, W, H } = getCtx('cmpCanvas');
+  const pad = { l: 100, r: 30, t: 30, b: 30 };
+  const maxTime = serialTotal * 1.1;
+
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('总耗时对比', W / 2, 18);
+
+  // Serial bar
+  const bh = 35;
+  const by1 = pad.t + 10;
+  const sw = (serialTotal / maxTime) * (W - pad.l - pad.r);
+  roundRect(ctx, pad.l, by1, sw, bh, 4, '#e9456066', '#e94560');
+  ctx.fillStyle = '#e94560'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  ctx.fillText('串行', pad.l - 8, by1 + bh / 2 + 4);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ccc';
+  ctx.fillText(`${serialTotal}ms`, pad.l + sw + 8, by1 + bh / 2 + 4);
+  ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+  ctx.fillText(`GPU利用率: ${(serialGpuTime / serialTotal * 100).toFixed(0)}%`, pad.l + 8, by1 + bh / 2 + 4);
+
+  // Parallel bar
+  const by2 = by1 + bh + 20;
+  const pw = (parallelTotal / maxTime) * (W - pad.l - pad.r);
+  roundRect(ctx, pad.l, by2, pw, bh, 4, '#66bb6a66', '#66bb6a');
+  ctx.fillStyle = '#66bb6a'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  ctx.fillText('多进程', pad.l - 8, by2 + bh / 2 + 4);
+  ctx.textAlign = 'left'; ctx.fillStyle = '#ccc';
+  ctx.fillText(`${parallelTotal}ms`, pad.l + pw + 8, by2 + bh / 2 + 4);
+  const parallelGpuUtil = (nBatches * gpuMs) / parallelTotal;
+  ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+  ctx.fillText(`GPU利用率: ${(parallelGpuUtil * 100).toFixed(0)}%`, pad.l + 8, by2 + bh / 2 + 4);
+
+  // Speedup
+  const speedup = serialTotal / parallelTotal;
+  ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`加速比: ${speedup.toFixed(1)}x`, W / 2, by2 + bh + 24);
+
+  document.getElementById('cmpInfo').innerHTML =
+    `图像 decode: ${decodeMs}ms/张 | GPU 训练: ${gpuMs}ms/batch | batch_size=${bs}<br>` +
+    `<span class="c-red">串行</span>: 加载 ${bs}×${decodeMs}=${bs*decodeMs}ms + GPU ${gpuMs}ms = ${bs*decodeMs+gpuMs}ms/batch → 总 ${serialTotal}ms<br>` +
+    `<span class="c-green">多进程</span>: ${nw} workers 并行加载 ${loadTimeParallel}ms + GPU ${gpuMs}ms (流水线重叠) → 总 ${parallelTotal}ms<br>` +
+    `<span class="c-yellow">关键</span>: 多进程让数据加载和 GPU 计算<b>重叠</b>，GPU 利用率从 ${(serialGpuTime/serialTotal*100).toFixed(0)}% → ${(parallelGpuUtil*100).toFixed(0)}%`;
+}
+
+function showCmpCode() {
+  document.getElementById('cmpCode').innerHTML = `<span class="comment"># 串行 — 一个一个加载</span>
+<span class="kw">class</span> <span class="fn">SimpleDataLoader</span>:
+    <span class="kw">def</span> <span class="fn">__iter__</span>(self):
+        <span class="kw">for</span> idx <span class="kw">in</span> indices:
+<span class="hl">            batch.append(dataset[idx])
+            <span class="comment"># ← GPU 在等!</span></span>
+            <span class="kw">if</span> len(batch) == bs:
+                <span class="kw">yield</span> collate(batch)
+
+<span class="comment"># 多进程 — workers 并行加载</span>
+<span class="kw">class</span> <span class="fn">VLMDataLoader</span>:
+    <span class="kw">def</span> <span class="fn">__iter__</span>(self):
+        <span class="comment"># 索引全部入队</span>
+        <span class="kw">for</span> idx <span class="kw">in</span> indices:
+            index_queue.put(idx)
+
+        <span class="comment"># Workers 并行处理 (后台)</span>
+        <span class="comment"># 主进程从 output_queue 取</span>
+<span class="hl">        <span class="kw">while</span> received < total:
+            sample = output_queue.get()
+            <span class="comment"># ← workers 已经在加载下一批</span>
+            batch.append(sample)
+            <span class="kw">if</span> len(batch) == bs:
+                <span class="kw">yield</span> collate(batch)</span>
+
+<span class="comment"># 核心: GPU 训练 batch N 时</span>
+<span class="comment"># workers 已在加载 batch N+1</span>
+<span class="comment"># → 流水线重叠 → GPU 不等数据</span>`;
+}
+
+// ============================================================
+// Panel 3: Queue Mechanism step by step
+// ============================================================
+let queueState, queueTimer;
+
+const QUEUE_STEPS = [
+  { phase: 'init', desc: '初始化: 创建 index_queue 和 output_queue，启动 workers' },
+  { phase: 'fill_idx', desc: '主进程把打乱的索引放入 index_queue: [3, 0, 2, 1, ...]' },
+  { phase: 'worker_get', desc: 'Worker 0 从 index_queue.get() 取出索引 3' },
+  { phase: 'worker_process', desc: 'Worker 0 处理: 读图 → decode → resize → tokenize' },
+  { phase: 'worker_put', desc: 'Worker 0 完成, output_queue.put(sample_3)' },
+  { phase: 'more_workers', desc: '多个 workers 同时工作，并行填充 output_queue' },
+  { phase: 'main_get', desc: '主进程 output_queue.get() 取出处理好的样本' },
+  { phase: 'collate', desc: 'batch_buffer 凑满 → vlm_collate() → 送 GPU' },
+  { phase: 'overlap', desc: 'GPU 训练时，workers 继续加载下一批 → 流水线重叠' },
+  { phase: 'poison', desc: '数据取完 → 主进程发送 None (毒丸) → workers 收到后退出' },
+  { phase: 'join', desc: 'worker.join() 等待所有 worker 退出 → DataLoader 结束' },
+];
+
+function resetQueue() {
+  if (queueTimer) { clearInterval(queueTimer); queueTimer = null; document.getElementById('queueAutoBtn').classList.remove('on'); }
+  queueState = { step: 0 };
+  drawQueue();
+  showQueueCode(0);
+}
+
+function stepQueue() {
+  if (!queueState) resetQueue();
+  if (queueState.step < QUEUE_STEPS.length - 1) queueState.step++;
+  drawQueue();
+  showQueueCode(queueState.step);
+}
+
+function autoQueue() {
+  const btn = document.getElementById('queueAutoBtn');
+  if (queueTimer) { clearInterval(queueTimer); queueTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  if (!queueState) resetQueue();
+  queueTimer = setInterval(() => {
+    if (queueState.step >= QUEUE_STEPS.length - 1) { clearInterval(queueTimer); queueTimer = null; btn.classList.remove('on'); return; }
+    queueState.step++;
+    drawQueue();
+    showQueueCode(queueState.step);
+  }, 1200);
+}
+
+function drawQueue() {
+  const { ctx, W, H } = getCtx('queueCanvas');
+  const s = queueState;
+  if (!s) return;
+  const step = s.step;
+  const phase = QUEUE_STEPS[step].phase;
+
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`Queue 机制 — Step ${step + 1}/${QUEUE_STEPS.length}`, W / 2, 18);
+
+  // === Main Process box ===
+  roundRect(ctx, 20, 40, 140, 50, 6, '#16213e', '#66bb6a');
+  ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('主进程', 90, 58);
+  ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+  ctx.fillText('调度 + collate', 90, 72);
+
+  // === Index Queue ===
+  const iqX = 200, iqY = 40;
+  roundRect(ctx, iqX, iqY, 250, 50, 6, '#16213e', '#4fc3f7');
+  ctx.fillStyle = '#4fc3f7'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('index_queue', iqX + 125, iqY + 16);
+
+  if (step >= 1) {
+    const items = step >= 9 ? ['None','None','None'] : step >= 2 ? [0, 2, 1] : [3, 0, 2, 1];
+    items.forEach((idx, i) => {
+      ctx.fillStyle = idx === 'None' ? '#e9456044' : '#4fc3f744';
+      ctx.fillRect(iqX + 10 + i * 50, iqY + 24, 44, 18);
+      ctx.fillStyle = idx === 'None' ? '#e94560' : '#4fc3f7';
+      ctx.font = '8px monospace';
+      ctx.fillText(idx === 'None' ? 'None ☠' : `idx=${idx}`, iqX + 32 + i * 50, iqY + 36);
+    });
+  }
+
+  // Arrow: main → index_queue
+  if (step >= 1) {
+    ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(160, 65); ctx.lineTo(iqX, 65); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#4fc3f7'; ctx.fillText('→', 185, 62);
+  }
+
+  // === Workers ===
+  const wY = 130;
+  for (let i = 0; i < 3; i++) {
+    const wx = 200 + i * 85;
+    const busy = (step >= 3 && step <= 8) || (step >= 5);
+    const poison = step >= 10;
+    const fill = poison ? '#e9456011' : busy && i === 0 ? COLORS[i] + '22' : '#16213e';
+    const stroke = poison ? '#e94560' : COLORS[i];
+    roundRect(ctx, wx, wY, 75, 45, 6, fill, stroke);
+    ctx.fillStyle = stroke; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`Worker ${i}`, wx + 37, wY + 16);
+
+    if (poison) {
+      ctx.fillStyle = '#e94560'; ctx.font = '8px monospace';
+      ctx.fillText('收到 None ☠', wx + 37, wY + 32);
+      ctx.fillText('退出', wx + 37, wY + 42);
+    } else if (step >= 3 && i === 0) {
+      ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+      ctx.fillText(step === 3 ? '处理 #3...' : step === 4 ? '完成 #3 ✓' : '处理中...', wx + 37, wY + 34);
+    } else if (step >= 5 && i > 0) {
+      ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+      ctx.fillText('处理中...', wx + 37, wY + 34);
+    }
+  }
+
+  // Arrows: index_queue → workers
+  if (step >= 2) {
+    ctx.strokeStyle = '#4fc3f755'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const wx = 237 + i * 85;
+      ctx.beginPath(); ctx.moveTo(wx, iqY + 50); ctx.lineTo(wx, wY); ctx.stroke();
+    }
+  }
+
+  // === Output Queue ===
+  const oqY = 220;
+  roundRect(ctx, 200, oqY, 250, 50, 6, '#16213e', '#ffd54f');
+  ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('output_queue (maxsize=prefetch×bs)', 325, oqY + 16);
+
+  if (step >= 4) {
+    const qItems = step >= 7 ? [1,2] : step >= 6 ? [3, 0, 2] : [3];
+    qItems.forEach((idx, i) => {
+      ctx.fillStyle = '#ffd54f44';
+      ctx.fillRect(210 + i * 60, oqY + 24, 54, 18);
+      ctx.fillStyle = '#ffd54f'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(`sample_${idx} ✓`, 237 + i * 60, oqY + 36);
+    });
+  }
+
+  // Arrows: workers → output_queue
+  if (step >= 4) {
+    ctx.strokeStyle = '#ffd54f55'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const wx = 237 + i * 85;
+      ctx.beginPath(); ctx.moveTo(wx, wY + 45); ctx.lineTo(wx, oqY); ctx.stroke();
+    }
+  }
+
+  // === Collate + GPU ===
+  const cgY = 310;
+  if (step >= 7) {
+    roundRect(ctx, 200, cgY, 120, 40, 6, '#16213e', '#66bb6a');
+    ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('collate(batch)', 260, cgY + 16);
+    ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+    ctx.fillText('pad + stack', 260, cgY + 30);
+
+    // Arrow down
+    ctx.fillStyle = '#66bb6a'; ctx.font = '12px monospace';
+    ctx.fillText('↓', 260, cgY + 52);
+
+    roundRect(ctx, 200, cgY + 58, 120, 40, 6, step >= 8 ? '#e9456033' : '#16213e', step >= 8 ? '#e94560' : '#0f3460');
+    ctx.fillStyle = step >= 8 ? '#e94560' : '#555'; ctx.font = 'bold 10px monospace';
+    ctx.fillText('GPU', 260, cgY + 78);
+    ctx.fillStyle = '#888'; ctx.font = '8px monospace';
+    ctx.fillText(step >= 8 ? 'forward + backward' : '等待', 260, cgY + 92);
+  }
+
+  // Arrow: output_queue → main
+  if (step >= 7) {
+    ctx.strokeStyle = '#66bb6a55'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(325, oqY + 50); ctx.lineTo(260, cgY); ctx.stroke();
+  }
+
+  // Overlap annotation
+  if (step >= 8) {
+    ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('⚡ GPU 训练时', 370, cgY + 70);
+    ctx.fillText('   Workers 同时加载', 370, cgY + 86);
+    ctx.fillText('   → 流水线重叠!', 370, cgY + 102);
+  }
+
+  // Poison pill annotation
+  if (step >= 9) {
+    ctx.fillStyle = '#e94560'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('☠ 毒丸 (Poison Pill)', 370, 145);
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+    ctx.fillText('index_queue.put(None)', 370, 162);
+    ctx.fillText('Worker 收到 None → break', 370, 178);
+  }
+
+  document.getElementById('queueInfo').innerHTML =
+    `<b>Step ${step + 1}</b>: ${QUEUE_STEPS[step].desc}`;
+}
+
+function showQueueCode(step) {
+  const phase = QUEUE_STEPS[step].phase;
+  const el = document.getElementById('queueCode');
+
+  if (phase === 'init' || phase === 'fill_idx') {
+    el.innerHTML = `<span class="comment"># __iter__ 开始</span>
+<span class="hl">index_queue = mp.Queue()
+output_queue = mp.Queue(
+    maxsize=prefetch * batch_size
+)
+
+<span class="comment"># 启动 workers</span>
+<span class="kw">for</span> wid <span class="kw">in</span> range(num_workers):
+    w = mp.Process(target=worker_fn, ...)
+    w.start()</span>
+
+<span class="comment"># 索引入队</span>
+indices = list(range(len(dataset)))
+random.shuffle(indices)
+<span class="kw">for</span> idx <span class="kw">in</span> indices:
+    index_queue.put(idx)`;
+  } else if (phase === 'worker_get' || phase === 'worker_process' || phase === 'worker_put' || phase === 'more_workers') {
+    el.innerHTML = `<span class="comment"># Worker 进程 (生产者)</span>
+<span class="kw">def</span> <span class="fn">worker_fn</span>(wid, dataset, idx_q, out_q):
+    <span class="comment"># 设置独立随机种子</span>
+    random.seed(base_seed + wid)
+
+    <span class="kw">while</span> True:
+<span class="hl">        idx = idx_q.get()  <span class="comment"># 阻塞等待</span>
+
+        <span class="kw">if</span> idx <span class="kw">is</span> None:    <span class="comment"># 毒丸!</span>
+            <span class="kw">break</span>
+
+        <span class="kw">try</span>:
+            sample = dataset[idx]
+            <span class="comment"># 读图 → decode → resize</span>
+            <span class="comment"># tokenize 对话文本</span>
+            out_q.put(sample)
+        <span class="kw">except</span> Exception:
+            <span class="comment"># 坏样本不杀 worker</span>
+            out_q.put({<span class="str">"__error__"</span>: True})</span>`;
+  } else if (phase === 'main_get' || phase === 'collate' || phase === 'overlap') {
+    el.innerHTML = `<span class="comment"># 主进程 (消费者)</span>
+batch_buffer = []
+
+<span class="kw">while</span> received < total:
+<span class="hl">    sample = output_queue.get()  <span class="comment"># 取样本</span>
+
+    <span class="kw">if</span> sample.get(<span class="str">"__error__"</span>):
+        <span class="kw">continue</span>  <span class="comment"># 跳过坏样本</span>
+
+    batch_buffer.append(sample)
+
+    <span class="kw">if</span> len(batch_buffer) == batch_size:
+        batch = vlm_collate(batch_buffer)
+        <span class="kw">yield</span> batch  <span class="comment"># → GPU</span>
+        batch_buffer = []</span>
+
+<span class="comment"># 此时 GPU 在训练 batch N</span>
+<span class="comment"># Workers 已在加载 batch N+1</span>
+<span class="comment"># → 数据和计算重叠!</span>`;
+  } else if (phase === 'poison' || phase === 'join') {
+    el.innerHTML = `<span class="comment"># 优雅关闭</span>
+<span class="kw">def</span> <span class="fn">_shutdown</span>(self):
+<span class="hl">    <span class="comment"># 发送毒丸 (Poison Pill)</span>
+    <span class="kw">for</span> _ <span class="kw">in</span> self.workers:
+        self.index_queue.put(None)
+        <span class="comment"># Worker 收到 None → break</span>
+
+    <span class="comment"># 等待 worker 退出</span>
+    <span class="kw">for</span> w <span class="kw">in</span> self.workers:
+        w.join(timeout=<span class="num">5</span>)
+        <span class="kw">if</span> w.is_alive():
+            w.terminate()  <span class="comment"># 超时强杀</span></span>
+
+<span class="comment"># 为什么用 daemon=True?</span>
+<span class="comment"># 主进程异常退出时</span>
+<span class="comment"># daemon workers 自动被杀</span>
+<span class="comment"># 避免孤儿进程</span>`;
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+resetPipe();
+showPipeCode('init');
+</script>
+</body>
+</html>

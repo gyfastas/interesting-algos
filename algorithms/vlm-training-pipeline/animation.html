@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VLM 训练流水线 — ViT 解耦 PP 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Consolas',monospace;min-height:100vh}
+  h1{text-align:center;padding:20px 0 4px;font-size:1.4em;color:#e94560}
+  .subtitle{text-align:center;color:#888;font-size:.8em;margin-bottom:16px}
+  .tabs{display:flex;justify-content:center;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+  .tab-btn{padding:8px 22px;border:2px solid #0f3460;background:transparent;color:#e0e0e0;font-family:inherit;font-size:.85em;cursor:pointer;border-radius:8px;transition:all .2s}
+  .tab-btn:hover{background:#0f3460}
+  .tab-btn.active{background:#e94560;border-color:#e94560;color:#fff}
+  .panel{display:none;padding:0 16px 28px;max-width:1000px;margin:0 auto}
+  .panel.active{display:block}
+  canvas{display:block;border:1px solid #0f3460;border-radius:8px;background:#0d1b2a;margin:0 auto}
+  .controls{display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .controls button{padding:7px 16px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.82em;cursor:pointer;border-radius:6px}
+  .controls button:hover{background:#0f3460}
+  .controls button.on{background:#e94560;border-color:#e94560}
+  .controls label{font-size:.8em;color:#888}
+  .controls select{padding:5px 8px;border:1px solid #0f3460;background:#16213e;color:#e0e0e0;font-family:inherit;font-size:.85em;border-radius:5px}
+  .info-box{background:#16213e;border:1px solid #0f3460;border-radius:10px;padding:14px 18px;margin-top:14px;font-size:.8em;line-height:1.7}
+  .c-red{color:#e94560;font-weight:bold}
+  .c-blue{color:#4fc3f7;font-weight:bold}
+  .c-green{color:#66bb6a;font-weight:bold}
+  .c-yellow{color:#ffd54f;font-weight:bold}
+</style>
+</head>
+<body>
+
+<h1>VLM 训练流水线</h1>
+<p class="subtitle">ViT 解耦 Pipeline Parallelism — 消除 Stage 0 瓶颈</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab(0)">PP Bubble 对比</button>
+  <button class="tab-btn" onclick="switchTab(1)">解耦方案详解</button>
+  <button class="tab-btn" onclick="switchTab(2)">MoE 场景分析</button>
+</div>
+
+<!-- ============== Panel 1: PP Bubble Comparison ============== -->
+<div class="panel active" id="panel-0">
+  <canvas id="bubbleCanvas" width="920" height="520"></canvas>
+  <div class="controls">
+    <label>PP stages:</label>
+    <select id="ppStages" onchange="drawBubble()">
+      <option value="4">4</option>
+      <option value="8" selected>8</option>
+      <option value="16">16</option>
+    </select>
+    <label>Micro-batches:</label>
+    <select id="numMB" onchange="drawBubble()">
+      <option value="4">4</option>
+      <option value="8" selected>8</option>
+    </select>
+    <label>ViT overhead:</label>
+    <select id="vitOverhead" onchange="drawBubble()">
+      <option value="0.2">20% (ViT 6B)</option>
+      <option value="0.4" selected>40% (ViT in MoE)</option>
+      <option value="0.7">70% (extreme)</option>
+    </select>
+  </div>
+  <div class="info-box" id="bubbleInfo">上图: ViT 在 stage 0 (朴素)，下图: ViT 解耦 PP (优化)。红色区域 = PP bubble (浪费)。</div>
+</div>
+
+<!-- ============== Panel 2: Decoupled Architecture ============== -->
+<div class="panel" id="panel-1">
+  <canvas id="archCanvas" width="920" height="520"></canvas>
+  <div class="controls">
+    <button onclick="resetArch()">重置</button>
+    <button onclick="stepArch()">下一步</button>
+    <button id="archAutoBtn" onclick="autoArch()">自动</button>
+  </div>
+  <div class="info-box" id="archInfo">逐步展示: Phase 1 (ViT 全量, 解耦 PP) → Phase 2 (PP 1F1B 流水线) → ViT recompute in backward</div>
+</div>
+
+<!-- ============== Panel 3: MoE Analysis ============== -->
+<div class="panel" id="panel-2">
+  <canvas id="moeCanvas" width="920" height="500"></canvas>
+  <div class="controls">
+    <label>LLM:</label>
+    <select id="moeModel" onchange="drawMoE()">
+      <option value="dense7b">Dense 7B</option>
+      <option value="dense72b">Dense 72B</option>
+      <option value="moe47b">MoE 47B (8B active)</option>
+      <option value="moe236b" selected>MoE 236B (21B active)</option>
+    </select>
+    <label>ViT:</label>
+    <select id="vitModel" onchange="drawMoE()">
+      <option value="400m" selected>SigLIP-400M</option>
+      <option value="6b">InternViT-6B</option>
+    </select>
+  </div>
+  <div class="info-box" id="moeInfo">MoE 模型中 ViT/LLM 比例更极端 → PP 不均衡更严重 → 解耦方案收益更大。</div>
+</div>
+
+<script>
+const DPR = Math.min(devicePixelRatio, 2);
+const panels = document.querySelectorAll('.panel');
+const tabBtns = document.querySelectorAll('.tab-btn');
+function switchTab(i) {
+  panels.forEach((p,j) => p.classList.toggle('active', i===j));
+  tabBtns.forEach((b,j) => b.classList.toggle('active', i===j));
+  if (i===0) drawBubble();
+  if (i===1) { resetArch(); }
+  if (i===2) drawMoE();
+}
+
+const canvasCache = {};
+function getCtx(id) {
+  if (!canvasCache[id]) {
+    const c = document.getElementById(id);
+    const w = +c.getAttribute('width'), h = +c.getAttribute('height');
+    c.width = w * DPR; c.height = h * DPR;
+    c.style.width = w + 'px'; c.style.height = h + 'px';
+    const ctx = c.getContext('2d');
+    ctx.scale(DPR, DPR);
+    canvasCache[id] = { ctx, W: w, H: h };
+  }
+  const cc = canvasCache[id];
+  cc.ctx.save(); cc.ctx.setTransform(DPR,0,0,DPR,0,0); cc.ctx.clearRect(0,0,cc.W,cc.H); cc.ctx.restore();
+  return cc;
+}
+
+function roundRect(ctx,x,y,w,h,r,fill,stroke) {
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.5;ctx.stroke();}
+}
+
+const MB_COLORS = ['#e94560','#4fc3f7','#66bb6a','#ffd54f','#ab47bc','#ff9800','#26c6da','#ec407a','#8d6e63','#78909c','#d4e157','#ef5350','#42a5f5','#66bb6a','#ffca28','#ab47bc'];
+
+// ============================================================
+// Panel 1: PP Bubble — Naive vs Decoupled
+// ============================================================
+function drawBubble() {
+  const { ctx, W, H } = getCtx('bubbleCanvas');
+  const ppS = +document.getElementById('ppStages').value;
+  const numMB = +document.getElementById('numMB').value;
+  const vitOH = +document.getElementById('vitOverhead').value;
+
+  const unitW = 28; // width of one time unit
+  const stageH = 18;
+  const stageGap = 3;
+  const leftPad = 70;
+
+  // === Top: Naive (ViT in Stage 0) ===
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('朴素: ViT 在 PP Stage 0 (瓶颈!)', leftPad, 18);
+
+  // 1F1B schedule with ViT overhead on stage 0
+  const naiveY = 30;
+  const normalTime = 1; // 1 unit per stage per MB
+  const stage0Time = 1 + vitOH; // stage 0 is slower
+
+  // Draw stages
+  for (let s = 0; s < ppS; s++) {
+    const y = naiveY + s * (stageH + stageGap);
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(`Stage ${s}`, leftPad - 6, y + stageH / 2 + 3);
+  }
+
+  // Forward phase: stage 0 starts, cascading
+  let totalNaiveTime = 0;
+  let bubbleUnits = 0;
+
+  for (let mb = 0; mb < numMB; mb++) {
+    for (let s = 0; s < ppS; s++) {
+      const isStage0 = s === 0;
+      const tw = isStage0 ? stage0Time : normalTime;
+      const startT = mb * stage0Time + s * normalTime; // simplified 1F1B
+      const x = leftPad + startT * unitW;
+      const y = naiveY + s * (stageH + stageGap);
+      const w = tw * unitW;
+
+      // Forward block
+      const color = MB_COLORS[mb % MB_COLORS.length];
+      ctx.fillStyle = color + '66';
+      ctx.fillRect(x, y, w - 1, stageH);
+      ctx.strokeStyle = color; ctx.lineWidth = 0.5;
+      ctx.strokeRect(x, y, w - 1, stageH);
+
+      // ViT portion in stage 0
+      if (isStage0) {
+        ctx.fillStyle = '#e9456066';
+        ctx.fillRect(x, y, vitOH * unitW, stageH);
+        if (mb === 0 && vitOH * unitW > 15) {
+          ctx.fillStyle = '#e94560'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
+          ctx.fillText('ViT', x + vitOH * unitW / 2, y + stageH / 2 + 2);
+        }
+      }
+
+      totalNaiveTime = Math.max(totalNaiveTime, startT + tw);
+    }
+  }
+
+  // Backward (simplified: reverse order)
+  const bwStartT = numMB * stage0Time + (ppS - 1) * normalTime;
+  for (let mb = numMB - 1; mb >= 0; mb--) {
+    for (let s = ppS - 1; s >= 0; s--) {
+      const isStage0 = s === 0;
+      const tw = isStage0 ? stage0Time : normalTime;
+      const bwIdx = (numMB - 1 - mb) * ppS + (ppS - 1 - s);
+      const startT = bwStartT + bwIdx * normalTime * 0.6;
+      const x = leftPad + startT * unitW;
+      const y = naiveY + s * (stageH + stageGap);
+      const w = tw * unitW * 0.8;
+
+      const color = MB_COLORS[mb % MB_COLORS.length];
+      ctx.fillStyle = color + '33';
+      ctx.fillRect(x, y, w - 1, stageH);
+
+      if (isStage0) {
+        ctx.fillStyle = '#e9456033';
+        ctx.fillRect(x + w - vitOH * unitW * 0.8, y, vitOH * unitW * 0.8, stageH);
+      }
+
+      totalNaiveTime = Math.max(totalNaiveTime, startT + tw * 0.8);
+    }
+  }
+
+  // Mark bubbles on non-stage-0 rows
+  for (let s = 1; s < ppS; s++) {
+    const y = naiveY + s * (stageH + stageGap);
+    // The bubble is the wait time at each stage due to stage 0 being slower
+    for (let mb = 0; mb < numMB; mb++) {
+      const idealStart = mb * normalTime + s * normalTime;
+      const actualStart = mb * stage0Time + s * normalTime;
+      if (actualStart > idealStart) {
+        const bx = leftPad + idealStart * unitW;
+        const bw = (actualStart - idealStart) * unitW;
+        ctx.fillStyle = '#e9456022';
+        ctx.fillRect(bx, y, bw, stageH);
+        bubbleUnits += (actualStart - idealStart);
+      }
+    }
+  }
+
+  // Naive efficiency
+  const naiveCompute = numMB * ppS * normalTime + numMB * vitOH;
+  const naiveTotal = totalNaiveTime;
+  const naiveEff = naiveCompute / (naiveTotal * ppS);
+
+  // === Bottom: Optimized (ViT decoupled) ===
+  const optY = naiveY + ppS * (stageH + stageGap) + 40;
+  ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('优化: ViT 解耦 PP (所有 stage 均衡)', leftPad, optY - 10);
+
+  // Phase 1: ViT (shown as a separate row before PP)
+  const vitPhaseW = Math.max(2, vitOH * 2) * unitW;
+  ctx.fillStyle = '#4fc3f722';
+  ctx.fillRect(leftPad, optY, vitPhaseW, stageH);
+  ctx.strokeStyle = '#4fc3f7'; ctx.lineWidth = 1;
+  ctx.strokeRect(leftPad, optY, vitPhaseW, stageH);
+  ctx.fillStyle = '#4fc3f7'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('ViT 全量 (no_grad, 所有 rank 并行)', leftPad + vitPhaseW / 2, optY + stageH / 2 + 3);
+
+  // PP stages (all balanced now)
+  const ppOptY = optY + stageH + 8;
+  for (let s = 0; s < ppS; s++) {
+    const y = ppOptY + s * (stageH + stageGap);
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(`Stage ${s}`, leftPad - 6, y + stageH / 2 + 3);
+  }
+
+  const optOffset = vitPhaseW + 4;
+  let totalOptTime = 0;
+
+  // Forward (all stages equal now)
+  for (let mb = 0; mb < numMB; mb++) {
+    for (let s = 0; s < ppS; s++) {
+      const startT = mb * normalTime + s * normalTime;
+      const x = leftPad + optOffset + startT * unitW;
+      const y = ppOptY + s * (stageH + stageGap);
+      const w = normalTime * unitW;
+
+      const color = MB_COLORS[mb % MB_COLORS.length];
+      ctx.fillStyle = color + '66';
+      ctx.fillRect(x, y, w - 1, stageH);
+      ctx.strokeStyle = color; ctx.lineWidth = 0.5;
+      ctx.strokeRect(x, y, w - 1, stageH);
+
+      totalOptTime = Math.max(totalOptTime, startT + normalTime);
+    }
+  }
+
+  // Backward
+  const optBwStart = numMB * normalTime + (ppS - 1) * normalTime;
+  for (let mb = numMB - 1; mb >= 0; mb--) {
+    for (let s = ppS - 1; s >= 0; s--) {
+      const bwIdx = (numMB - 1 - mb) * ppS + (ppS - 1 - s);
+      const startT = optBwStart + bwIdx * normalTime * 0.6;
+      const x = leftPad + optOffset + startT * unitW;
+      const y = ppOptY + s * (stageH + stageGap);
+      const w = normalTime * unitW * 0.8;
+
+      const color = MB_COLORS[mb % MB_COLORS.length];
+      ctx.fillStyle = color + '33';
+      ctx.fillRect(x, y, w - 1, stageH);
+
+      // ViT recompute indicator on stage 0 backward
+      if (s === 0) {
+        ctx.fillStyle = '#ffd54f33';
+        ctx.fillRect(x, y, w * 0.3, stageH);
+      }
+
+      totalOptTime = Math.max(totalOptTime, startT + normalTime * 0.8);
+    }
+  }
+
+  // Legend
+  const legY = ppOptY + ppS * (stageH + stageGap) + 12;
+  const legItems = [
+    { color: '#4fc3f7', label: 'ViT (Phase 1)' },
+    { color: MB_COLORS[0], label: 'Forward (各 MB)' },
+    { color: MB_COLORS[0] + '55', label: 'Backward' },
+    { color: '#e94560', label: 'ViT 瓶颈/bubble' },
+    { color: '#ffd54f', label: 'ViT recompute (吸收于 bubble)' },
+  ];
+  legItems.forEach((item, i) => {
+    const x = 80 + i * 170;
+    ctx.fillStyle = item.color; ctx.fillRect(x, legY, 12, 10);
+    ctx.fillStyle = '#888'; ctx.font = '8px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(item.label, x + 16, legY + 9);
+  });
+
+  // Efficiency comparison
+  const optCompute = numMB * ppS * normalTime;
+  const optTotal = totalOptTime + vitOH * 2; // add Phase 1 time
+  const optEff = optCompute / (optTotal * ppS);
+  const bubblePct = (bubbleUnits / (naiveTotal * ppS) * 100);
+  const speedup = naiveTotal / optTotal;
+
+  document.getElementById('bubbleInfo').innerHTML =
+    `<b>PP=${ppS}, MB=${numMB}, ViT overhead=${(vitOH*100).toFixed(0)}%</b><br>` +
+    `<span class="c-red">朴素</span>: Stage 0 比其他 stage ��� ${(vitOH*100).toFixed(0)}% → ` +
+    `每个 MB 产生 ${(ppS-1)} 个 stage 的 bubble → <b>~${bubblePct.toFixed(0)}% 时间浪费</b><br>` +
+    `<span class="c-green">优化</span>: ViT 解耦后各 stage 均衡，Phase 1 (ViT 全量) 只加很少的前置时间<br>` +
+    `<span class="c-yellow">关键</span>: Stage 0 backward 中的 ViT recompute 时间 ≤ PP bubble → 净开销为零`;
+}
+
+// ============================================================
+// Panel 2: Decoupled Architecture step-by-step
+// ============================================================
+const ARCH_STEPS = [
+  { phase: 'overview', title: '问题: ViT 在 PP Stage 0',
+    desc: 'ViT (400M) 作为 Stage 0 的一部分，导致 Stage 0 比其他 stage 慢 → PP bubble' },
+  { phase: 'replicate', title: 'Step 1: ViT replicate 到所有 PP rank',
+    desc: 'ViT 只有 400M = 0.8GB (bf16)，每张卡都放得下。所有 PP rank 都有完整 ViT 副本。' },
+  { phase: 'phase1', title: 'Phase 1: ViT 全量 Forward (解耦 PP)',
+    desc: '所有 rank 同时跑 ViT(all_images)，no_grad。拿到全部 visual tokens。不走 PP 通信。' },
+  { phase: 'phase2_fwd', title: 'Phase 2: PP 流水线 Forward',
+    desc: 'PP 流水线只跑 LLM layers。Stage 0 不含 ViT → 和其他 stage 均衡! ViT 的 visual tokens 直接从本地拿。' },
+  { phase: 'phase2_bwd', title: 'Phase 2: PP 流水线 Backward',
+    desc: 'Backward: 梯度从 Stage N → Stage 0。Stage 0 需要 ViT 梯度时做 recompute (with grad)。' },
+  { phase: 'recompute', title: 'ViT Recompute 被 bubble 吸收',
+    desc: 'Stage 0 做 ViT recompute 时，Stage 1-7 正在做其他 MB 的 forward → recompute 和 bubble 重叠 → 净零开销!' },
+  { phase: 'allreduce', title: 'Phase 3: ViT Grad All-Reduce',
+    desc: 'ViT 在每张卡上独立跑 → 梯度需要 all-reduce 跨所有 DP rank。如果 ViT freeze 则跳过。' },
+];
+
+let archStep = 0, archTimer;
+
+function resetArch() {
+  if (archTimer) { clearInterval(archTimer); archTimer = null; document.getElementById('archAutoBtn').classList.remove('on'); }
+  archStep = 0; drawArch();
+}
+function stepArch() { if (archStep < ARCH_STEPS.length - 1) archStep++; drawArch(); }
+function autoArch() {
+  const btn = document.getElementById('archAutoBtn');
+  if (archTimer) { clearInterval(archTimer); archTimer = null; btn.classList.remove('on'); return; }
+  btn.classList.add('on');
+  archTimer = setInterval(() => {
+    if (archStep >= ARCH_STEPS.length - 1) { clearInterval(archTimer); archTimer = null; btn.classList.remove('on'); return; }
+    archStep++; drawArch();
+  }, 2000);
+}
+
+function drawArch() {
+  const { ctx, W, H } = getCtx('archCanvas');
+  const s = ARCH_STEPS[archStep];
+
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`${s.title}`, W / 2, 18);
+
+  const ppS = 4; // simplified to 4 stages
+  const stageW = 160, stageH = 80, stageGap = 25;
+  const startX = 60, startY = 60;
+
+  // Draw PP stages
+  for (let i = 0; i < ppS; i++) {
+    const x = startX + i * (stageW + stageGap);
+    const y = startY + 80;
+
+    // Stage box
+    const isStage0 = i === 0;
+    let fill = '#16213e', stroke = '#0f3460';
+
+    if (s.phase === 'overview' && isStage0) { fill = '#e9456022'; stroke = '#e94560'; }
+    else if (s.phase === 'phase2_fwd') { fill = '#66bb6a22'; stroke = '#66bb6a'; }
+    else if (s.phase === 'phase2_bwd') { fill = '#ffd54f22'; stroke = '#ffd54f'; }
+    else if (s.phase === 'recompute' && isStage0) { fill = '#4fc3f722'; stroke = '#4fc3f7'; }
+
+    roundRect(ctx, x, y, stageW, stageH, 6, fill, stroke);
+
+    ctx.fillStyle = stroke; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`PP Stage ${i}`, x + stageW / 2, y + 16);
+
+    // Content
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+    if (s.phase === 'overview' && isStage0) {
+      ctx.fillStyle = '#e94560';
+      ctx.fillText('ViT (400M) ← 瓶颈!', x + stageW / 2, y + 35);
+      ctx.fillText('+ LLM layers 0-9', x + stageW / 2, y + 50);
+      ctx.fillText('比其他 stage 慢 40%', x + stageW / 2, y + 68);
+    } else if (s.phase === 'overview') {
+      ctx.fillText(`LLM layers ${i*10}-${i*10+9}`, x + stageW / 2, y + 40);
+      ctx.fillStyle = '#555';
+      ctx.fillText('等待 Stage 0...', x + stageW / 2, y + 58);
+    } else {
+      ctx.fillText(`LLM layers ${i*10}-${i*10+9}`, x + stageW / 2, y + 40);
+      if (s.phase === 'phase2_fwd') {
+        ctx.fillStyle = '#66bb6a';
+        ctx.fillText('forward →', x + stageW / 2, y + 58);
+      } else if (s.phase === 'phase2_bwd') {
+        ctx.fillStyle = '#ffd54f';
+        ctx.fillText('← backward', x + stageW / 2, y + 58);
+      } else if (s.phase === 'recompute' && isStage0) {
+        ctx.fillStyle = '#4fc3f7';
+        ctx.fillText('ViT recompute here', x + stageW / 2, y + 55);
+        ctx.fillText('(吸收于 bubble)', x + stageW / 2, y + 70);
+      }
+    }
+
+    // PP arrows
+    if (i < ppS - 1) {
+      const ax = x + stageW + 2;
+      ctx.fillStyle = s.phase === 'phase2_fwd' ? '#66bb6a' : s.phase === 'phase2_bwd' ? '#ffd54f' : '#333';
+      ctx.font = '14px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(s.phase === 'phase2_bwd' ? '←' : '→', ax + stageGap / 2, y + stageH / 2 + 4);
+    }
+  }
+
+  // ViT boxes (replicated on all ranks)
+  if (archStep >= 1) {
+    const vitY = startY;
+    for (let i = 0; i < ppS; i++) {
+      const x = startX + i * (stageW + stageGap);
+      const active = s.phase === 'phase1' || s.phase === 'replicate';
+      roundRect(ctx, x, vitY, stageW, 35, 4,
+        active ? '#4fc3f722' : '#0d1b2a', active ? '#4fc3f7' : '#222');
+      ctx.fillStyle = active ? '#4fc3f7' : '#444'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(`ViT 副本 (rank ${i})`, x + stageW / 2, vitY + 14);
+      if (s.phase === 'phase1') {
+        ctx.fillStyle = '#ffd54f'; ctx.font = '8px monospace';
+        ctx.fillText('no_grad, 全量 forward', x + stageW / 2, vitY + 28);
+      } else {
+        ctx.fillStyle = '#555'; ctx.font = '8px monospace';
+        ctx.fillText('0.8GB (bf16)', x + stageW / 2, vitY + 28);
+      }
+    }
+
+    // "replicate" annotation
+    if (s.phase === 'replicate') {
+      ctx.fillStyle = '#4fc3f7'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('每张卡都有完整 ViT — 只多 0.8GB 显存', W / 2, vitY + 50);
+    }
+  }
+
+  // Phase 1 visual tokens
+  if (archStep >= 2) {
+    const vtY = startY + 42;
+    ctx.fillStyle = '#4fc3f7'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    if (s.phase === 'phase1') {
+      ctx.fillText('↓ all_visual_tokens (每张卡本地有, 不需要 PP 通信!)', W / 2, vtY + 6);
+    }
+  }
+
+  // All-reduce annotation
+  if (s.phase === 'allreduce') {
+    const arY = startY + 80 + stageH + 30;
+    ctx.strokeStyle = '#ab47bc'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+    for (let i = 0; i < ppS; i++) {
+      const x = startX + i * (stageW + stageGap) + stageW / 2;
+      ctx.beginPath(); ctx.moveTo(x, startY + 35); ctx.lineTo(x, arY); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    roundRect(ctx, W / 2 - 140, arY, 280, 30, 4, '#ab47bc22', '#ab47bc');
+    ctx.fillStyle = '#ab47bc'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('ViT grad all-reduce (跨 DP ranks)', W / 2, arY + 18);
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace';
+    ctx.fillText('ViT freeze 时不需要这一步', W / 2, arY + 45);
+  }
+
+  // Bottom: key insight
+  const insightY = H - 80;
+  if (archStep >= 3) {
+    roundRect(ctx, 60, insightY, W - 120, 60, 6, '#16213e', '#ffd54f');
+    ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('关键: ViT 不在 PP 关键路径上', W / 2, insightY + 16);
+    ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+    if (s.phase === 'phase2_fwd') {
+      ctx.fillText('PP 流水线只有 LLM layers → 各 stage 完全均衡 → 零 bubble', W / 2, insightY + 34);
+      ctx.fillText('Stage 0 的 visual tokens 从本地 ViT 副本直接拿, 不走 PP 通信', W / 2, insightY + 50);
+    } else if (s.phase === 'phase2_bwd' || s.phase === 'recompute') {
+      ctx.fillText('Stage 0 backward 时做 ViT recompute → 梯度传回 ViT + Projector', W / 2, insightY + 34);
+      ctx.fillText('此时其他 stage 在做下一个 MB 的 forward → recompute 被 pipeline 吸收', W / 2, insightY + 50);
+    } else {
+      ctx.fillText('ViT 解耦 PP → Stage 0 不再是瓶颈 → PP efficiency ≈ 100%', W / 2, insightY + 34);
+      ctx.fillText('代价: 每卡多存 0.8GB ViT 参数 + Phase 1 的微量前置时间', W / 2, insightY + 50);
+    }
+  }
+
+  document.getElementById('archInfo').innerHTML =
+    `<b>Step ${archStep + 1}/${ARCH_STEPS.length}</b>: ${s.desc}`;
+}
+
+// ============================================================
+// Panel 3: MoE Scale Analysis
+// ============================================================
+const MODELS = {
+  dense7b:   { name: 'Dense 7B',   total: 7,   active: 7,   layers: 32,  type: 'dense' },
+  dense72b:  { name: 'Dense 72B',  total: 72,  active: 72,  layers: 80,  type: 'dense' },
+  moe47b:    { name: 'MoE 47B',    total: 47,  active: 8,   layers: 32,  type: 'moe', experts: 8 },
+  moe236b:   { name: 'MoE 236B',   total: 236, active: 21,  layers: 60,  type: 'moe', experts: 64 },
+};
+const VITS = {
+  '400m': { name: 'SigLIP-400M', params: 0.4, flops_ratio: 0.02 },
+  '6b':   { name: 'InternViT-6B', params: 5.9, flops_ratio: 0.15 },
+};
+
+function drawMoE() {
+  const { ctx, W, H } = getCtx('moeCanvas');
+  const lm = MODELS[document.getElementById('moeModel').value];
+  const vt = VITS[document.getElementById('vitModel').value];
+
+  ctx.fillStyle = '#aaa'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`${vt.name} + ${lm.name} — PP 不均衡分析`, W / 2, 22);
+
+  // === Left: Parameter ratio ===
+  const barX = 80, barW = 300, barY = 55, barH = 30;
+
+  ctx.fillStyle = '#888'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('参数量比例:', barX, barY - 6);
+
+  // ViT bar
+  const vitFrac = vt.params / (vt.params + lm.total);
+  const vitBarW = Math.max(4, vitFrac * barW);
+  roundRect(ctx, barX, barY, vitBarW, barH, 3, '#4fc3f766', '#4fc3f7');
+  // LLM bar
+  roundRect(ctx, barX + vitBarW, barY, barW - vitBarW, barH, 3, '#e9456066', '#e94560');
+
+  ctx.fillStyle = '#4fc3f7'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`ViT ${vt.params}B`, barX + vitBarW / 2, barY + barH / 2 + 3);
+  ctx.fillStyle = '#e94560';
+  ctx.fillText(`LLM ${lm.total}B`, barX + vitBarW + (barW - vitBarW) / 2, barY + barH / 2 + 3);
+
+  ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`ViT / LLM = ${(vt.params / lm.total * 100).toFixed(2)}%`, barX + barW + 20, barY + barH / 2 + 3);
+
+  // === PP Stage imbalance ===
+  const ppS = 8;
+  const ppY = barY + barH + 35;
+  ctx.fillStyle = '#888'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(`PP=${ppS} stages 时的 Stage 负载:`, barX, ppY - 8);
+
+  const perStageParams = lm.active / ppS; // active params per stage
+  const stage0Extra = vt.params;
+  const maxLoad = perStageParams + stage0Extra;
+
+  for (let s = 0; s < ppS; s++) {
+    const y = ppY + s * 28;
+    const isS0 = s === 0;
+    const load = isS0 ? perStageParams + stage0Extra : perStageParams;
+    const w = (load / maxLoad) * barW;
+
+    ctx.fillStyle = '#555'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(`Stage ${s}`, barX - 6, y + 12);
+
+    // LLM portion
+    const llmW = (perStageParams / maxLoad) * barW;
+    roundRect(ctx, barX, y, llmW, 20, 2, '#e9456044', '#e94560');
+
+    if (isS0) {
+      // ViT portion
+      const vitW = (stage0Extra / maxLoad) * barW;
+      roundRect(ctx, barX + llmW, y, vitW, 20, 2, '#4fc3f744', '#4fc3f7');
+      ctx.fillStyle = '#4fc3f7'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
+      if (vitW > 20) ctx.fillText('ViT', barX + llmW + vitW / 2, y + 13);
+    }
+
+    // Load value
+    ctx.fillStyle = isS0 ? '#e94560' : '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+    const pct = ((load / perStageParams - 1) * 100);
+    ctx.fillText(
+      isS0 ? `${load.toFixed(1)}B (+${pct.toFixed(0)}% 不均衡!)` : `${load.toFixed(1)}B`,
+      barX + w + 8, y + 13
+    );
+  }
+
+  // === Right: Impact analysis ===
+  const rightX = 500, rightY = 55;
+  ctx.fillStyle = '#888'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+  ctx.fillText('影响分析:', rightX, rightY);
+
+  const imbalancePct = (stage0Extra / perStageParams * 100);
+  const bubblePct = imbalancePct * (ppS - 1) / (ppS + imbalancePct / 100 * ppS) * 100 / ppS;
+  const bubblePctSimple = Math.min(50, imbalancePct * (ppS - 1) / ppS / (1 + imbalancePct / 100));
+
+  const items = [
+    { label: 'Stage 0 多出的负载', value: `+${imbalancePct.toFixed(0)}%`, color: imbalancePct > 20 ? '#e94560' : '#ffd54f' },
+    { label: 'PP bubble (估算)', value: `~${bubblePctSimple.toFixed(0)}% 时间浪费`, color: bubblePctSimple > 15 ? '#e94560' : '#ffd54f' },
+    { label: '每卡多存 ViT', value: `+${(vt.params * 2).toFixed(1)}GB (bf16)`, color: '#4fc3f7' },
+    { label: 'ViT 计算占比', value: `~${(vt.flops_ratio * 100).toFixed(0)}% 总 FLOPs`, color: '#66bb6a' },
+    { label: 'Recompute 净开销', value: bubblePctSimple > vt.flops_ratio * 100 ? '≈ 0% (被 bubble 吸收)' : `~${(vt.flops_ratio * 100).toFixed(0)}%`, color: '#66bb6a' },
+  ];
+
+  items.forEach((item, i) => {
+    const y = rightY + 20 + i * 28;
+    ctx.fillStyle = '#888'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+    ctx.fillText(item.label + ':', rightX, y);
+    ctx.fillStyle = item.color; ctx.font = 'bold 10px monospace';
+    ctx.fillText(item.value, rightX + 170, y);
+  });
+
+  // === Bottom: Before/After comparison ===
+  const cmpY = ppY + ppS * 28 + 30;
+  ctx.fillStyle = '#888'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('解耦前 vs 解耦后', W / 2, cmpY);
+
+  // Before
+  roundRect(ctx, 60, cmpY + 14, 380, 50, 6, '#e9456011', '#e94560');
+  ctx.fillStyle = '#e94560'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('朴素: ViT 在 Stage 0', 250, cmpY + 30);
+  ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+  ctx.fillText(`PP 效率 ≈ ${(100 - bubblePctSimple).toFixed(0)}% | 浪费 ${bubblePctSimple.toFixed(0)}% 时间 (${ppS-1} 个 stage 等 Stage 0)`, 250, cmpY + 48);
+
+  // After
+  roundRect(ctx, 480, cmpY + 14, 380, 50, 6, '#66bb6a11', '#66bb6a');
+  ctx.fillStyle = '#66bb6a'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('优化: ViT 解耦 PP', 670, cmpY + 30);
+  ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+  ctx.fillText(`PP 效率 ≈ 100% | ViT recompute 开销被 bubble 吸收`, 670, cmpY + 48);
+
+  // Arrow
+  ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('→', 455, cmpY + 40);
+
+  // MoE specific note
+  if (lm.type === 'moe') {
+    const noteY = cmpY + 75;
+    roundRect(ctx, 60, noteY, W - 120, 45, 6, '#16213e', '#ffd54f');
+    ctx.fillStyle = '#ffd54f'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(`MoE 特殊性: ${lm.experts} experts → EP=${lm.experts} → 已用大量 GPU`, W / 2, noteY + 14);
+    ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+    ctx.fillText(`active 只有 ${lm.active}B (总 ${lm.total}B) → 计算密度低 → 更怕 bubble → 解耦收益更大`, W / 2, noteY + 32);
+  }
+
+  document.getElementById('moeInfo').innerHTML =
+    `<b>${vt.name} + ${lm.name}</b> | ViT/LLM = ${(vt.params/lm.total*100).toFixed(2)}%<br>` +
+    `<span class="c-red">朴素 PP</span>: Stage 0 多 ${imbalancePct.toFixed(0)}% 负载 → ~${bubblePctSimple.toFixed(0)}% bubble → ` +
+    `<b>${(ppS-1)} 个 stage 都在等 Stage 0</b><br>` +
+    `<span class="c-green">解耦 PP</span>: ViT 独立全量 forward, 每卡多存 ${(vt.params*2).toFixed(1)}GB → PP 各 stage 均衡<br>` +
+    (lm.type === 'moe' ? `<span class="c-yellow">MoE</span>: EP=${lm.experts} 已用大量 GPU, active 参数只有 ${lm.active}B → 不均衡更极端, 解耦更关键` : '');
+}
+
+// ============================================================
+// Init
+// ============================================================
+drawBubble();
+</script>
+</body>
+</html>
