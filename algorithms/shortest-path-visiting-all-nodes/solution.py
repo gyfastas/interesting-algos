@@ -129,6 +129,86 @@ def generate_connected_graph(n: int, edge_prob: float = 0.3) -> list[list[int]]:
 
 
 # =============================================================================
+# 变种：哈密顿路径（每个节点仅允许访问一次）
+# =============================================================================
+
+def hamiltonian_path_dp(graph: list[list[int]]) -> int:
+    """
+    哈密顿路径：找到一条经过每个节点恰好一次的路径，求最短长度。
+
+    与 LeetCode 847 的区别：
+      - 原题允许重复访问节点（BFS 即可）
+      - 本题每个节点只能访问一次（状态压缩 DP）
+
+    状态：dp[mask][i] = 访问了 mask 中的节点，当前在 i 的最短路径长度
+    转移：dp[mask|2^j][j] = min(dp[mask][i] + 1)  for i in mask, j not in mask, edge(i,j)
+    初始：dp[2^i][i] = 0
+    答案：min(dp[2^n - 1][i])
+
+    时间复杂度: O(2^n * n^2)
+    空间复杂度: O(2^n * n)
+    """
+    n = len(graph)
+    if n == 1:
+        return 0
+
+    INF = float('inf')
+    dp = [[INF] * n for _ in range(1 << n)]
+
+    # 初始状态：从每个节点出发
+    for i in range(n):
+        dp[1 << i][i] = 0
+
+    # 按 mask 从小到大遍历
+    for mask in range(1 << n):
+        for i in range(n):
+            if dp[mask][i] == INF:
+                continue
+            if not (mask & (1 << i)):
+                continue  # i 不在 mask 中，非法状态
+            for j in graph[i]:
+                if mask & (1 << j):
+                    continue  # j 已经访问过，不能重复访问
+                new_mask = mask | (1 << j)
+                dp[new_mask][j] = min(dp[new_mask][j], dp[mask][i] + 1)
+
+    target = (1 << n) - 1
+    ans = min(dp[target][i] for i in range(n))
+    return ans if ans != INF else -1
+
+
+def hamiltonian_path_brute(graph: list[list[int]]) -> int:
+    """
+    暴力枚举所有排列，仅用于小图验证（n <= 8）。
+    """
+    n = len(graph)
+    if n == 1:
+        return 0
+
+    # 建立邻接矩阵
+    adj = [[False] * n for _ in range(n)]
+    for u in range(n):
+        for v in graph[u]:
+            adj[u][v] = True
+
+    from itertools import permutations
+    best = float('inf')
+
+    for perm in permutations(range(n)):
+        valid = True
+        dist = 0
+        for i in range(n - 1):
+            if not adj[perm[i]][perm[i + 1]]:
+                valid = False
+                break
+            dist += 1
+        if valid:
+            best = min(best, dist)
+
+    return best if best != float('inf') else -1
+
+
+# =============================================================================
 # 验证与测试
 # =============================================================================
 
@@ -154,7 +234,7 @@ def demo():
         ([[1, 2, 3, 4], [0], [0], [0], [0]], 6),
     ]
 
-    print("[1] 官方示例测试")
+    print("[1] 官方示例测试（允许重复访问）")
     print("-" * 60)
     for graph, expected in cases:
         result = shortest_path_length_bfs(graph)
@@ -164,7 +244,7 @@ def demo():
         print()
 
     # 小图暴力验证
-    print("[2] Monte Carlo 随机验证（n≤8，BFS vs 暴力 DFS）")
+    print("[2] Monte Carlo 随机验证（n≤8，BFS vs 暴力）")
     print("-" * 60)
     random.seed(42)
     passed = 0
@@ -203,15 +283,79 @@ def demo():
 
     # 复杂度分析
     print()
-    print("[4] 复杂度分析")
+    print("[4] 复杂度分析（允许重复访问）")
     print("-" * 60)
-    print("  状态数: O(2^n · n)，每个状态记录一个节点和访问集合")
-    print("  转移数: 每个状态最多向 degree(u) 个邻居转移")
-    print("  总时间: O(2^n · n · avg_degree) ≈ O(2^n · n^2)")
+    print("  状态数: O(2^n · n)")
+    print("  总时间: O(2^n · n^2)")
     print("  总空间: O(2^n · n)")
     print()
-    print("  当 n=12 时，状态数 ≈ 12 × 4096 = 49,152，BFS 轻松处理")
-    print("  当 n=20 时，状态数 ≈ 20 × 1,048,576 ≈ 2000 万，内存压力大")
+
+    # ========== 变种：哈密顿路径 ==========
+    print("=" * 70)
+    print("变种：哈密顿路径（每个节点仅允许访问一次）")
+    print("=" * 70)
+    print()
+
+    # 哈密顿路径示例
+    hp_cases = [
+        # 链状：有哈密顿路径 0-1-2-3
+        ([[1], [0, 2], [1, 3], [2]], 3),
+        # 环状：有哈密顿路径 0-1-2
+        ([[1, 2], [0, 2], [0, 1]], 2),
+        # 星形（5节点）：没有哈密顿路径！因为从叶子出发只能到中心，然后被困
+        ([[1, 2, 3, 4], [0], [0], [0], [0]], -1),
+        # 完全图 K4：哈密顿路径长度 = 3
+        ([[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]], 3),
+    ]
+
+    print("[5] 哈密顿路径示例测试")
+    print("-" * 60)
+    for graph, expected in hp_cases:
+        result = hamiltonian_path_dp(graph)
+        status = "✓" if result == expected else "✗"
+        note = "（不存在哈密顿路径）" if expected == -1 else ""
+        print(f"  graph={graph}")
+        print(f"  结果: {result}, 期望: {expected}  {status} {note}")
+        print()
+
+    # 哈密顿路径暴力验证
+    print("[6] 哈密顿路径随机验证（n≤8，DP vs 暴力排列）")
+    print("-" * 60)
+    passed = 0
+    total = 100
+    for _ in range(total):
+        n = random.randint(1, 8)
+        graph = generate_connected_graph(n, edge_prob=0.4)
+        fast = hamiltonian_path_dp(graph)
+        slow = hamiltonian_path_brute(graph)
+        if fast == slow:
+            passed += 1
+
+    print(f"  测试结果：通过 {passed}/{total} 轮")
+    print()
+
+    # 对比：允许重复 vs 不允许重复
+    print("[7] 对比：允许重复访问 vs 仅允许访问一次")
+    print("-" * 60)
+    print(f"{'图类型':>12} | {'允许重复':>10} | {'仅一次':>8} | {'说明':>20}")
+    print("-" * 60)
+
+    chain = [[1], [0, 2], [1, 3], [2]]
+    star = [[1, 2, 3, 4], [0], [0], [0], [0]]
+    complete = [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]]
+
+    for name, g in [("链状", chain), ("星形", star), ("完全图 K4", complete)]:
+        r1 = shortest_path_length_bfs(g)
+        r2 = hamiltonian_path_dp(g)
+        note = "相同" if r1 == r2 else ("哈密顿不存在" if r2 == -1 else "重复可缩短")
+        print(f"{name:>12} | {r1:>10} | {r2:>8} | {note:>20}")
+
+    print("-" * 60)
+    print()
+    print("  关键发现：")
+    print("  • 链状/环状：两种问题的答案相同（天然不需要重复）")
+    print("  • 星形图：允许重复时答案=6，不允许时答案=-1（不存在哈密顿路径）")
+    print("  • 完全图：两种问题的答案相同（任意排列都是哈密顿路径）")
 
 
 if __name__ == "__main__":

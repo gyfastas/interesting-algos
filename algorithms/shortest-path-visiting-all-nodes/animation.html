@@ -157,6 +157,7 @@
       <button onclick="stepBFS()">单步</button>
       <button onclick="resetBFS()">重置</button>
       <button onclick="randomGraph()">随机图</button>
+      <button onclick="toggleMode()" id="btnMode">模式: 允许重复</button>
       <div class="slider-group">
         <label>节点数</label>
         <input type="range" id="nRange" min="3" max="8" value="5">
@@ -173,6 +174,7 @@
       <span>节点: <span class="highlight" id="stateNode">-</span></span>
       <span>距离: <span class="highlight" id="stateDist">-</span></span>
       <span>已探索: <span class="ok" id="exploredCount">0</span></span>
+      <span>模式: <span class="highlight" id="modeDisp">允许重复</span></span>
     </div>
   </div>
 
@@ -193,6 +195,7 @@
     <span>最短路径长度: <span class="ok" id="answer">-</span></span>
     <span>总状态数: <span id="totalStates">-</span></span>
     <span>最优路径: <span id="optimalPath">-</span></span>
+    <span id="hamiltonNote" style="color:#f87171;display:none;">⚠ 此图不存在哈密顿路径！</span>
   </div>
 </div>
 
@@ -210,6 +213,7 @@ let bfsTimer = null;
 let parent = {};  // for path reconstruction
 let optimalPath = [];
 let answerDist = -1;
+let hamiltonMode = false;  // false=允许重复, true=仅一次
 
 function generateGraph() {
   n = parseInt(document.getElementById('nRange').value, 10);
@@ -270,6 +274,7 @@ function resetBFS() {
   document.getElementById('answer').textContent = '-';
   document.getElementById('totalStates').textContent = (1 << n) * n;
   document.getElementById('optimalPath').textContent = '-';
+  document.getElementById('hamiltonNote').style.display = 'none';
 
   drawGraph();
   drawTree();
@@ -337,11 +342,21 @@ function bfsLoop() {
   } else {
     bfsRunning = false;
     document.getElementById('btnBFS').textContent = '开始 BFS ▶';
+    if (answerDist === -1 && hamiltonMode) {
+      document.getElementById('hamiltonNote').style.display = 'inline';
+    }
   }
 }
 
 function randomGraph() {
   generateGraph();
+}
+
+function toggleMode() {
+  hamiltonMode = !hamiltonMode;
+  document.getElementById('btnMode').textContent = hamiltonMode ? '模式: 仅一次' : '模式: 允许重复';
+  document.getElementById('modeDisp').textContent = hamiltonMode ? '仅一次' : '允许重复';
+  resetBFS();
 }
 
 // ==================== Drawing ====================
