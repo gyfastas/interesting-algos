@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LRU Cache — 交互式可视化</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eaeaea;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; color: #e94560; }
+  .subtitle { color: #a0a0b0; font-size: 0.85rem; margin-bottom: 16px; }
+
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .cache-row {
+    display: flex;
+    gap: 8px;
+    min-height: 60px;
+    align-items: center;
+    padding: 10px;
+    background: #0f1628;
+    border-radius: 8px;
+    margin: 10px 0;
+    flex-wrap: wrap;
+  }
+  .cache-item {
+    width: 64px;
+    height: 50px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    transition: all 0.3s ease;
+    position: relative;
+  }
+  .cache-item .k { font-weight: bold; font-size: 0.9rem; }
+  .cache-item .v { font-size: 0.7rem; opacity: 0.8; }
+  .cache-item.hot {
+    background: #e94560;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(233,69,96,0.4);
+  }
+  .cache-item.cold {
+    background: #0f3460;
+    color: #8899aa;
+    border: 1px solid #1a3a5c;
+  }
+  .cache-item.evicted {
+    animation: evictAnim 0.5s forwards;
+  }
+  @keyframes evictAnim {
+    to { transform: scale(0); opacity: 0; }
+  }
+  .cache-item.new {
+    animation: newAnim 0.4s ease;
+  }
+  @keyframes newAnim {
+    0% { transform: scale(0.5); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .cache-item.access {
+    animation: accessAnim 0.3s ease;
+  }
+  @keyframes accessAnim {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+
+  .arrow-label {
+    font-size: 0.7rem;
+    color: #8899aa;
+    text-align: center;
+    margin: 4px 0;
+  }
+
+  .ctrl-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 10px;
+  }
+  button {
+    background: #0f3460;
+    color: #eaeaea;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #1a4a80; }
+  button.primary { background: #e94560; }
+  button.primary:hover { background: #ff6077; }
+
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b0b0c0;
+    font-size: 0.8rem;
+  }
+  .slider-group label { min-width: 50px; }
+  .slider-group span.val { color: #e94560; font-weight: bold; min-width: 36px; text-align: right; }
+  input[type="range"] { accent-color: #e94560; width: 110px; }
+
+  .log {
+    background: #0f1628;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 10px;
+    max-height: 140px;
+    overflow-y: auto;
+    font-family: "Consolas", monospace;
+    font-size: 0.78rem;
+    color: #a0a0b0;
+    line-height: 1.5;
+  }
+  .log .evict { color: #f87171; }
+  .log .hit { color: #4ade80; }
+  .log .miss { color: #60a5fa; }
+
+  .section-title {
+    color: #e94560;
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+  }
+
+  .stats-bar {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #c0c0d0;
+  }
+  .stats-bar span.highlight { color: #e94560; font-weight: bold; }
+  .stats-bar span.ok { color: #4ade80; }
+
+  .op-btn-group {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .op-btn {
+    background: #1a3a5c;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    color: #c0c0d0;
+  }
+  .op-btn:hover { background: #0f3460; color: #eaeaea; }
+</style>
+</head>
+<body>
+
+<h1>LRU Cache — 交互式可视化</h1>
+<div class="subtitle">哈希表 + 双向链表 · O(1) get/put · 淘汰策略演示</div>
+
+<div class="panel">
+  <div class="section-title">缓存面板（左=最久未使用，右=最近使用）</div>
+  <div class="arrow-label">← 最久未使用 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 最近使用 →</div>
+  <div class="cache-row" id="cachePanel"></div>
+  <div class="stats-bar">
+    <span>容量: <span class="highlight" id="capDisplay">4</span></span>
+    <span>当前大小: <span id="sizeDisplay">0</span></span>
+    <span>命中: <span class="ok" id="hitDisplay">0</span></span>
+    <span>未命中: <span class="highlight" id="missDisplay">0</span></span>
+    <span>淘汰: <span id="evictDisplay">0</span></span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-title">操作控制</div>
+  <div class="ctrl-row">
+    <div class="slider-group">
+      <label>容量</label>
+      <input type="range" id="capRange" min="1" max="8" value="4">
+      <span class="val" id="capVal">4</span>
+    </div>
+    <button onclick="resetCache()">重置缓存</button>
+    <button class="primary" onclick="runPreset()">运行预设序列 ▶</button>
+  </div>
+  <div class="ctrl-row" style="margin-top:8px;">
+    <span style="color:#a0a0b0;font-size:0.8rem;">快速操作:</span>
+    <div class="op-btn-group">
+      <button class="op-btn" onclick="doPut(1,10)">put(1,10)</button>
+      <button class="op-btn" onclick="doPut(2,20)">put(2,20)</button>
+      <button class="op-btn" onclick="doPut(3,30)">put(3,30)</button>
+      <button class="op-btn" onclick="doPut(4,40)">put(4,40)</button>
+      <button class="op-btn" onclick="doPut(5,50)">put(5,50)</button>
+      <button class="op-btn" onclick="doGet(1)">get(1)</button>
+      <button class="op-btn" onclick="doGet(2)">get(2)</button>
+      <button class="op-btn" onclick="doGet(3)">get(3)</button>
+    </div>
+  </div>
+  <div class="log" id="logBox"></div>
+</div>
+
+<div class="panel">
+  <div class="section-title">核心结构</div>
+  <div style="font-size:0.85rem;color:#b0b0c0;line-height:1.6;">
+    <div style="margin-bottom:6px;"><strong style="color:#e94560;">哈希表</strong> dict[key] → node &nbsp;|&nbsp; O(1) 定位</div>
+    <div style="margin-bottom:6px;"><strong style="color:#e94560;">双向链表</strong> head ←→ node₁ ←→ node₂ ←→ ... ←→ nodeₖ ←→ tail</div>
+    <div>get: 哈希表找到节点 → 移到尾部（最近使用）</div>
+    <div>put: 已存在则更新移尾；不存在则新建移尾 → 若满则淘汰头部</div>
+  </div>
+</div>
+
+<script>
+// ==================== LRU Cache JS Implementation ====================
+class DLinkedNode {
+  constructor(key=0, val=0) {
+    this.key = key;
+    this.val = val;
+    this.prev = null;
+    this.next = null;
+  }
+}
+
+class LRUCache {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.cache = new Map();
+    this.size = 0;
+    this.head = new DLinkedNode();
+    this.tail = new DLinkedNode();
+    this.head.next = this.tail;
+    this.tail.prev = this.head;
+  }
+
+  _remove(node) {
+    node.prev.next = node.next;
+    node.next.prev = node.prev;
+  }
+
+  _addToTail(node) {
+    const prev = this.tail.prev;
+    prev.next = node;
+    node.prev = prev;
+    node.next = this.tail;
+    this.tail.prev = node;
+  }
+
+  _moveToTail(node) {
+    this._remove(node);
+    this._addToTail(node);
+  }
+
+  _popHead() {
+    const node = this.head.next;
+    this._remove(node);
+    return node;
+  }
+
+  get(key) {
+    if (!this.cache.has(key)) return -1;
+    const node = this.cache.get(key);
+    this._moveToTail(node);
+    return node.val;
+  }
+
+  put(key, value) {
+    let evicted = null;
+    if (this.cache.has(key)) {
+      const node = this.cache.get(key);
+      node.val = value;
+      this._moveToTail(node);
+    } else {
+      const node = new DLinkedNode(key, value);
+      this.cache.set(key, node);
+      this._addToTail(node);
+      this.size++;
+      if (this.size > this.capacity) {
+        evicted = this._popHead();
+        this.cache.delete(evicted.key);
+        this.size--;
+      }
+    }
+    return evicted;
+  }
+
+  getKeys() {
+    const result = [];
+    let cur = this.head.next;
+    while (cur !== this.tail) {
+      result.push(cur.key);
+      cur = cur.next;
+    }
+    return result;
+  }
+
+  getEntries() {
+    const result = [];
+    let cur = this.head.next;
+    while (cur !== this.tail) {
+      result.push({key: cur.key, val: cur.val});
+      cur = cur.next;
+    }
+    return result;
+  }
+}
+
+// ==================== UI State ====================
+let cache = new LRUCache(4);
+let hits = 0, misses = 0, evictions = 0;
+
+function renderCache(highlightKey=null, evictedKey=null, isNew=false) {
+  const panel = document.getElementById('cachePanel');
+  panel.innerHTML = '';
+  const entries = cache.getEntries();
+
+  entries.forEach((e, idx) => {
+    const div = document.createElement('div');
+    div.className = 'cache-item';
+    if (e.key === evictedKey) {
+      div.classList.add('evicted');
+    } else if (e.key === highlightKey) {
+      div.classList.add(isNew ? 'new' : 'access');
+      div.classList.add('hot');
+    } else {
+      div.classList.add('cold');
+    }
+    div.innerHTML = `<span class="k">${e.key}</span><span class="v">${e.val}</span>`;
+    panel.appendChild(div);
+  });
+
+  document.getElementById('sizeDisplay').textContent = entries.length;
+  document.getElementById('hitDisplay').textContent = hits;
+  document.getElementById('missDisplay').textContent = misses;
+  document.getElementById('evictDisplay').textContent = evictions;
+}
+
+function addLog(text, type='') {
+  const box = document.getElementById('logBox');
+  const div = document.createElement('div');
+  div.className = type;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function doPut(key, val) {
+  const evicted = cache.put(key, val);
+  if (evicted) {
+    evictions++;
+    addLog(`put(${key}, ${val}) → 淘汰 ${evicted.key}`, 'evict');
+    renderCache(key, evicted.key, true);
+  } else if (cache.cache.has(key)) {
+    // check if it was update
+    const entries = cache.getEntries();
+    const existedBefore = entries.filter(e => e.key === key).length > 0;
+    // Actually we can't tell update vs new easily after the fact
+    addLog(`put(${key}, ${val})`, '');
+    renderCache(key, null, true);
+  }
+}
+
+function doGet(key) {
+  const val = cache.get(key);
+  if (val === -1) {
+    misses++;
+    addLog(`get(${key}) = -1 (未命中)`, 'miss');
+    renderCache();
+  } else {
+    hits++;
+    addLog(`get(${key}) = ${val} (命中)`, 'hit');
+    renderCache(key);
+  }
+}
+
+function resetCache() {
+  const cap = parseInt(document.getElementById('capRange').value, 10);
+  cache = new LRUCache(cap);
+  hits = misses = evictions = 0;
+  document.getElementById('logBox').innerHTML = '';
+  document.getElementById('capDisplay').textContent = cap;
+  renderCache();
+  addLog(`初始化 LRUCache(capacity=${cap})`);
+}
+
+function runPreset() {
+  resetCache();
+  const ops = [
+    () => doPut(1, 10),
+    () => doPut(2, 20),
+    () => doPut(3, 30),
+    () => doPut(4, 40),
+    () => doGet(1),
+    () => doPut(5, 50),
+    () => doGet(2),
+    () => doPut(3, 300),
+    () => doGet(1),
+    () => doPut(6, 60),
+  ];
+
+  let i = 0;
+  function next() {
+    if (i < ops.length) {
+      ops[i]();
+      i++;
+      setTimeout(next, 600);
+    }
+  }
+  next();
+}
+
+// ==================== Events ====================
+document.getElementById('capRange').addEventListener('input', e => {
+  document.getElementById('capVal').textContent = e.target.value;
+  resetCache();
+});
+
+// ==================== Init ====================
+resetCache();
+</script>
+</body>
+</html>

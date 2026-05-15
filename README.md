@@ -29,6 +29,7 @@
 | 021 | [优惠券收集问题](./algorithms/coupon-collector/) | 概率论、期望、调和数 | ⭐⭐⭐ |
 | 022 | [MHA 手写 Forward & Backward（困难版）](./algorithms/multi-head-attention-with-backward/) | 反向传播、注意力机制、Autograd | ⭐⭐⭐⭐ |
 | 023 | [访问所有节点的最短路径](./algorithms/shortest-path-visiting-all-nodes/) | 图论、状态压缩、BFS | ⭐⭐⭐⭐ |
+| 024 | [LRU Cache（线程安全进阶版）](./algorithms/lru-cache/) | 数据结构、哈希表、双向链表、并发 | ⭐⭐⭐ |
 
 ## 目录结构
 
