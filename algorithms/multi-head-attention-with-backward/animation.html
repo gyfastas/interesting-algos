@@ -168,7 +168,18 @@
   </div>
   <div class="formula-box">
     <div style="margin-bottom:6px;"><strong style="color:#e94560">2. CrossEntropy + Softmax 合并</strong></div>
-    <div class="big">dL/d(logits) = (softmax(logits) − one_hot(target)) / N</div>
+    <div style="font-size:0.95rem;color:#c0c0d0;margin-bottom:8px;">
+      分开看时：Softmax 输出 p，CE 计算 −log(pₜ)。合并后求导，两个复杂运算竟相互抵消。
+    </div>
+    <div style="font-size:0.95rem;color:#c0c0d0;margin-bottom:8px;">
+      <strong>对正确类别 t：</strong><br>
+      ∂L/∂xₜ = −(1/pₜ) · ∂pₜ/∂xₜ = −(1/pₜ) · pₜ(1−pₜ) = <span style="color:#ffd700">pₜ − 1</span>
+    </div>
+    <div style="font-size:0.95rem;color:#c0c0d0;margin-bottom:8px;">
+      <strong>对其他类别 i ≠ t：</strong><br>
+      ∂L/∂xᵢ = −(1/pₜ) · ∂pₜ/∂xᵢ = −(1/pₜ) · (−pₜpᵢ) = <span style="color:#ffd700">pᵢ</span>
+    </div>
+    <div class="big">∴ dL/d(logits) = (softmax(logits) − one_hot(target)) / N</div>
     <div style="margin-top:6px;font-size:0.9rem;color:#a0a0b0;">
       深度学习中最优美的公式：两个复杂运算合并后，梯度竟如此简单
     </div>
