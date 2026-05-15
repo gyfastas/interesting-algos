@@ -24,13 +24,14 @@
 | 016 | [MLP 多元回归（两层感知机）](./algorithms/linear-regression/) | 手写 Autograd、反向传播、链式法则 | ⭐⭐⭐ |
 | 017 | [VLM DataLoader](./algorithms/vlm-dataloader/) | 多进程、生产者-消费者队列 | ⭐⭐ |
 | 018 | [VLM 训练流水线](./algorithms/vlm-training-pipeline/) | ViT 全量+LLM Micro-Batch+Recompute | ⭐⭐⭐ |
-| 019 | [寻找两个有序数组的中位数](./algorithms/median-of-two-sorted-arrays/) | 二分查找、数组 | ⭐⭐⭐⭐⭐ |
+| 019 | [寻找两个有序数组的中位数](./algorithms/median-of-two-sorted-arrays/) | 二分查找、数组 | ⭐⭐⭐ |
 | 020 | [洛伦兹吸引子](./algorithms/lorenz-attractor/) | 动力系统、混沌理论、数值模拟 | ⭐⭐⭐ |
 | 021 | [优惠券收集问题](./algorithms/coupon-collector/) | 概率论、期望、调和数 | ⭐⭐⭐ |
 | 022 | [MHA 手写 Forward & Backward（困难版）](./algorithms/multi-head-attention-with-backward/) | 反向传播、注意力机制、Autograd | ⭐⭐⭐⭐ |
 | 023 | [访问所有节点的最短路径](./algorithms/shortest-path-visiting-all-nodes/) | 图论、状态压缩、BFS | ⭐⭐⭐⭐ |
 | 024 | [LRU Cache（线程安全进阶版）](./algorithms/lru-cache/) | 数据结构、哈希表、双向链表、并发 | ⭐⭐⭐ |
 | 025 | [矩阵中的最长递增路径](./algorithms/longest-increasing-path-in-matrix/) | 动态规划、记忆化搜索、DFS | ⭐⭐⭐⭐ |
+| 026 | [MoE Transformer Layer Forward & Backward](./algorithms/moe-transformer/) | 混合专家、手写反向传播、负载均衡 | ⭐⭐⭐⭐⭐ |
 
 ## 目录结构
 

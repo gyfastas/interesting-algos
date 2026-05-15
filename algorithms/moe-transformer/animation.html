@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoE Transformer — 手写 Forward & Backward</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif;
+    overflow-x:hidden; min-height:100vh;
+  }
+  .container { max-width:1200px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; margin-bottom:6px; font-size:1.6rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.9rem; margin-bottom:20px; }
+
+  .layout { display:flex; gap:16px; flex-wrap:wrap; }
+  .panel {
+    background:#16213e; border-radius:12px; padding:16px;
+    border:1px solid #0f3460;
+  }
+  .left { flex:1 1 340px; }
+  .right { flex:2 1 500px; }
+
+  .controls { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+  .control-group { display:flex; flex-direction:column; gap:4px; }
+  .control-group label { font-size:0.75rem; color:#aab; }
+  input[type=range] { width:120px; }
+  button {
+    background:#e94560; color:#fff; border:none; padding:8px 18px;
+    border-radius:6px; cursor:pointer; font-size:0.85rem;
+    transition:opacity .2s;
+  }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+
+  .legend { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:0.75rem; }
+  .legend span { display:flex; align-items:center; gap:4px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+  .stats { display:flex; gap:16px; margin-top:10px; font-size:0.8rem; color:#aab; }
+  .stats b { color:#fff; }
+
+  .network-viz { position:relative; height:360px; }
+  .layer-label {
+    position:absolute; font-size:0.7rem; color:#889;
+    background:#0d1b2a; padding:2px 6px; border-radius:4px;
+    border:1px solid #1a3a5c;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔀 MoE Transformer Layer — 手写 Forward & Backward</h1>
+  <div class="subtitle">纯 NumPy 实现 · Top-K 路由 · 负载均衡 · 交互式训练可视化</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="controls">
+        <div class="control-group">
+          <label>α (aux loss)</label>
+          <input id="alphaSlider" type="range" min="0" max="1" step="0.05" value="0.3">
+          <span id="alphaVal" style="font-size:0.75rem;color:#e94560;">0.30</span>
+        </div>
+        <div class="control-group">
+          <label>Top-K</label>
+          <input id="topkSlider" type="range" min="1" max="4" step="1" value="2">
+          <span id="topkVal" style="font-size:0.75rem;color:#e94560;">2</span>
+        </div>
+        <div class="control-group">
+          <label>专家数</label>
+          <input id="expertSlider" type="range" min="2" max="8" step="2" value="4">
+          <span id="expertVal" style="font-size:0.75rem;color:#e94560;">4</span>
+        </div>
+        <button id="btnTrain">▶ 开始训练</button>
+        <button id="btnReset" class="secondary">⟲ 重置</button>
+      </div>
+      <canvas id="netCanvas" width="340" height="360"></canvas>
+    </div>
+
+    <div class="panel right">
+      <canvas id="chartCanvas" width="560" height="180"></canvas>
+      <div class="legend">
+        <span><i class="dot" style="background:#e94560;"></i>总 Loss</span>
+        <span><i class="dot" style="background:#4cc9f0;"></i>CE Loss</span>
+        <span><i class="dot" style="background:#f9c74f;"></i>Aux Loss</span>
+        <span><i class="dot" style="background:#90be6d;"></i>Accuracy</span>
+      </div>
+      <canvas id="barCanvas" width="560" height="140" style="margin-top:10px;"></canvas>
+      <div class="stats">
+        <div>Epoch: <b id="statEpoch">0</b></div>
+        <div>Accuracy: <b id="statAcc">0%</b></div>
+        <div>负载均衡度(std): <b id="statBal">--</b></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// 简化版 MoE 模拟器（纯 JS，用于可视化）
+// =============================================================================
+
+const VOCAB = 8, D_MODEL = 16, SEQ_LEN = 6, BATCH = 8;
+const COLORS = ['#e94560','#4cc9f0','#f9c74f','#90be6d','#f3722c','#577590','#f8961e','#43aa8b'];
+
+function randn(m,n) {
+  const a = new Float32Array(m*n);
+  for(let i=0;i<a.length;i++) a[i] = (Math.random()*2-1)*0.3;
+  return {data:a, rows:m, cols:n};
+}
+function matmul(A, B) {
+  const C = new Float32Array(A.rows * B.cols);
+  for(let i=0;i<A.rows;i++){
+    for(let k=0;k<A.cols;k++){
+      const aik = A.data[i*A.cols+k];
+      for(let j=0;j<B.cols;j++){
+        C[i*B.cols+j] += aik * B.data[k*B.cols+j];
+      }
+    }
+  }
+  return {data:C, rows:A.rows, cols:B.cols};
+}
+function addBias(M, b) {
+  for(let i=0;i<M.rows;i++){
+    for(let j=0;j<M.cols;j++){
+      M.data[i*M.cols+j] += b.data[j];
+    }
+  }
+}
+function relu(M) {
+  const mask = new Float32Array(M.data.length);
+  for(let i=0;i<M.data.length;i++){
+    mask[i] = M.data[i] > 0 ? 1 : 0;
+    M.data[i] = Math.max(0, M.data[i]);
+  }
+  return mask;
+}
+function softmaxRows(M) {
+  for(let i=0;i<M.rows;i++){
+    let max = -Infinity;
+    for(let j=0;j<M.cols;j++) max = Math.max(max, M.data[i*M.cols+j]);
+    let sum = 0;
+    for(let j=0;j<M.cols;j++){
+      const v = Math.exp(M.data[i*M.cols+j]-max);
+      M.data[i*M.cols+j] = v;
+      sum += v;
+    }
+    for(let j=0;j<M.cols;j++) M.data[i*M.cols+j] /= sum;
+  }
+}
+function argmaxRow(M, row) {
+  let best=0, bestv=-Infinity;
+  for(let j=0;j<M.cols;j++){
+    const v = M.data[row*M.cols+j];
+    if(v>bestv){bestv=v; best=j;}
+  }
+  return best;
+}
+
+class Expert {
+  constructor(d_in, d_ff, d_out) {
+    this.W1 = randn(d_in, d_ff); this.b1 = randn(1, d_ff);
+    this.W2 = randn(d_ff, d_out); this.b2 = randn(1, d_out);
+  }
+  forward(x) {
+    this.x = x;
+    let h = matmul(x, this.W1); addBias(h, this.b1);
+    this.mask = relu(h);
+    let out = matmul(h, this.W2); addBias(out, this.b2);
+    return out;
+  }
+}
+
+class MoESim {
+  constructor(numExperts, topK, alpha) {
+    this.numExperts = numExperts;
+    this.topK = topK;
+    this.alpha = alpha;
+    // Embeddings
+    this.tokEmb = randn(VOCAB, D_MODEL);
+    this.posEmb = randn(SEQ_LEN, D_MODEL);
+    // Simple projection: concat pos+avg
+    this.Wproj = randn(D_MODEL, VOCAB);
+    this.bproj = randn(1, VOCAB);
+    // Router
+    this.Wr = randn(D_MODEL, numExperts);
+    this.br = randn(1, numExperts);
+    // Experts
+    this.experts = [];
+    for(let e=0;e<numExperts;e++) this.experts.push(new Expert(D_MODEL, 32, D_MODEL));
+    // Metrics
+    this.epoch = 0;
+    this.history = { total:[], ce:[], aux:[], acc:[], balance:[] };
+    this.loadCounts = new Float32Array(numExperts);
+    this.lr = 0.08;
+  }
+
+  generateBatch() {
+    const x = new Int32Array(BATCH*SEQ_LEN);
+    for(let i=0;i<x.length;i++) x[i] = Math.floor(Math.random()*VOCAB);
+    return {x, y: new Int32Array(x)};
+  }
+
+  embed(tokens) {
+    const out = new Float32Array(BATCH*SEQ_LEN*D_MODEL);
+    for(let b=0;b<BATCH;b++){
+      for(let s=0;s<SEQ_LEN;s++){
+        const tok = tokens[b*SEQ_LEN+s];
+        for(let d=0;d<D_MODEL;d++){
+          out[(b*SEQ_LEN+s)*D_MODEL+d] = this.tokEmb.data[tok*D_MODEL+d] + this.posEmb.data[s*D_MODEL+d];
+        }
+      }
+    }
+    return {data:out, rows:BATCH*SEQ_LEN, cols:D_MODEL};
+  }
+
+  step() {
+    const batch = this.generateBatch();
+    // Embed
+    let h = this.embed(batch.x);
+    // Router
+    const gatesFlat = matmul(h, this.Wr);
+    addBias(gatesFlat, this.br);
+    softmaxRows(gatesFlat);
+    const gates = gatesFlat.data; // (B*S, E)
+    // Top-K mask + norm
+    const T = BATCH*SEQ_LEN;
+    const normGates = new Float32Array(T*this.numExperts);
+    const topkMask = new Float32Array(T*this.numExperts);
+    this.loadCounts.fill(0);
+    for(let t=0;t<T;t++){
+      const idx = [];
+      for(let e=0;e<this.numExperts;e++) idx.push({e, v:gates[t*this.numExperts+e]});
+      idx.sort((a,b)=>b.v-a.v);
+      let sum=0;
+      for(let k=0;k<this.topK;k++){ topkMask[t*this.numExperts+idx[k].e]=1; sum+=gates[t*this.numExperts+idx[k].e]; this.loadCounts[idx[k].e]++; }
+      if(sum<1e-8) sum=1;
+      for(let k=0;k<this.topK;k++) normGates[t*this.numExperts+idx[k].e] = gates[t*this.numExperts+idx[k].e]/sum;
+    }
+    // Experts
+    let out = new Float32Array(T*D_MODEL);
+    for(let e=0;e<this.numExperts;e++){
+      const expertOut = this.experts[e].forward(h);
+      for(let t=0;t<T;t++){
+        const g = normGates[t*this.numExperts+e];
+        if(g===0) continue;
+        for(let d=0;d<D_MODEL;d++) out[t*D_MODEL+d] += g * expertOut.data[t*D_MODEL+d];
+      }
+    }
+    // Projection
+    const logitsFlat = matmul({data:out, rows:T, cols:D_MODEL}, this.Wproj);
+    addBias(logitsFlat, this.bproj);
+    const logits = logitsFlat.data;
+
+    // Loss
+    let ceLoss = 0;
+    let correct = 0;
+    for(let t=0;t<T;t++){
+      const target = batch.y[t];
+      let maxL=-Infinity, sumE=0;
+      for(let v=0;v<VOCAB;v++){ maxL=Math.max(maxL,logits[t*VOCAB+v]); }
+      for(let v=0;v<VOCAB;v++){ sumE += Math.exp(logits[t*VOCAB+v]-maxL); }
+      const p = Math.exp(logits[t*VOCAB+v]-maxL)/sumE;
+      ceLoss += -Math.log(p+1e-10);
+      if(argmaxRow(logitsFlat, t)===target) correct++;
+    }
+    ceLoss /= T;
+    const acc = correct/T;
+
+    // Aux loss
+    const totalLoad = this.loadCounts.reduce((a,b)=>a+b,0);
+    let auxLoss = 0;
+    for(let e=0;e<this.numExperts;e++){
+      const f = this.loadCounts[e] / (T*this.topK);
+      let pe = 0;
+      for(let t=0;t<T;t++) pe += gates[t*this.numExperts+e];
+      pe /= T;
+      auxLoss += f*pe;
+    }
+    auxLoss *= this.alpha * this.numExperts;
+    const totalLoss = ceLoss + auxLoss;
+
+    // Fake gradient update (simplified SGD on embeddings + router bias for demo)
+    for(let t=0;t<T;t++){
+      const target = batch.y[t];
+      let maxL=-Infinity, sumE=0;
+      for(let v=0;v<VOCAB;v++){ maxL=Math.max(maxL,logits[t*VOCAB+v]); }
+      for(let v=0;v<VOCAB;v++){ sumE += Math.exp(logits[t*VOCAB+v]-maxL); }
+      for(let v=0;v<VOCAB;v++){
+        let grad = (Math.exp(logits[t*VOCAB+v]-maxL) / sumE) / T;
+        if(v===target) grad -= 1/T;
+        this.bproj.data[v] -= this.lr * grad * 0.5;
+      }
+    }
+    // Simplified router bias update from aux loss
+    for(let e=0;e<this.numExperts;e++){
+      const f = this.loadCounts[e] / (T*this.topK);
+      let pe = 0;
+      for(let t=0;t<T;t++) pe += gates[t*this.numExperts+e];
+      pe /= T;
+      const grad = this.alpha * this.numExperts * f / T;
+      // push all experts towards equal load
+      this.br.data[e] -= this.lr * grad * 10;
+    }
+
+    this.epoch++;
+    this.history.total.push(totalLoss);
+    this.history.ce.push(ceLoss);
+    this.history.aux.push(auxLoss);
+    this.history.acc.push(acc);
+    const frac = this.loadCounts.map(c=>c/totalLoad*100);
+    const mean = frac.reduce((a,b)=>a+b,0)/this.numExperts;
+    const std = Math.sqrt(frac.reduce((a,b)=>a+(b-mean)**2,0)/this.numExperts);
+    this.history.balance.push(std);
+
+    return { totalLoss, ceLoss, auxLoss, acc, load: Array.from(this.loadCounts), std };
+  }
+}
+
+// =============================================================================
+// Canvas 绘制
+// =============================================================================
+
+const netCanvas = document.getElementById('netCanvas');
+const chartCanvas = document.getElementById('chartCanvas');
+const barCanvas = document.getElementById('barCanvas');
+const nctx = netCanvas.getContext('2d');
+const cctx = chartCanvas.getContext('2d');
+const bctx = barCanvas.getContext('2d');
+
+let sim = new MoESim(4, 2, 0.3);
+let running = false;
+let animId = null;
+
+function drawNetwork() {
+  const w = netCanvas.width, h = netCanvas.height;
+  nctx.clearRect(0,0,w,h);
+  const cx = w/2;
+  const layers = [
+    {name:'Embed', y:40, color:'#577590'},
+    {name:'MHA', y:100, color:'#f8961e'},
+    {name:'Router', y:160, color:'#f3722c'},
+    {name:'Experts', y:230, color:'#90be6d'},
+    {name:'Proj+Loss', y:310, color:'#e94560'},
+  ];
+
+  // Connections
+  nctx.strokeStyle='#2a3a5c'; nctx.lineWidth=2;
+  for(let i=0;i<layers.length-1;i++){
+    nctx.beginPath();
+    nctx.moveTo(cx, layers[i].y+15);
+    nctx.lineTo(cx, layers[i+1].y-15);
+    nctx.stroke();
+  }
+
+  // Nodes
+  layers.forEach((l, i)=>{
+    const rw = i===3 ? 120 : 90;
+    nctx.fillStyle='#0d1b2a';
+    nctx.strokeStyle=l.color;
+    nctx.lineWidth=2;
+    nctx.beginPath();
+    nctx.roundRect(cx-rw/2, l.y-15, rw, 30, 6);
+    nctx.fill(); nctx.stroke();
+    nctx.fillStyle=l.color;
+    nctx.font='bold 11px sans-serif';
+    nctx.textAlign='center';
+    nctx.textBaseline='middle';
+    nctx.fillText(l.name, cx, l.y);
+  });
+
+  // Expert mini boxes
+  const ne = sim.numExperts;
+  const ew = Math.min(24, 100/ne);
+  const exStart = cx - (ne*ew)/2 + ew/2;
+  for(let e=0;e<ne;e++){
+    const x = exStart + e*ew;
+    nctx.fillStyle=COLORS[e%COLORS.length];
+    nctx.globalAlpha=0.8;
+    nctx.fillRect(x-10, 220, 20, 8);
+    nctx.globalAlpha=1;
+  }
+  nctx.font='9px sans-serif'; nctx.fillStyle='#889';
+  nctx.fillText(`${ne} experts, top-${sim.topK}`, cx, 245);
+
+  // Top-K arrows animated
+  if(sim.epoch>0){
+    const t = (Date.now()/500)%1;
+    nctx.strokeStyle='#e94560';
+    nctx.lineWidth=1.5;
+    nctx.globalAlpha=0.5+0.5*Math.sin(t*Math.PI*2);
+    for(let e=0;e<Math.min(ne, sim.topK);e++){
+      const x = exStart + e*ew;
+      nctx.beginPath();
+      nctx.moveTo(cx, 175);
+      nctx.lineTo(x, 220);
+      nctx.stroke();
+    }
+    nctx.globalAlpha=1;
+  }
+}
+
+function drawChart() {
+  const w = chartCanvas.width, h = chartCanvas.height;
+  cctx.clearRect(0,0,w,h);
+  const pad={l:40,t:10,r:10,b:25};
+  const cw=w-pad.l-pad.r, ch=h-pad.t-pad.b;
+
+  // Grid
+  cctx.strokeStyle='#1a3a5c'; cctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=pad.t+ch*(i/4);
+    cctx.beginPath(); cctx.moveTo(pad.l,y); cctx.lineTo(pad.l+cw,y); cctx.stroke();
+  }
+
+  const hist = sim.history;
+  const maxLen = 300;
+  const start = Math.max(0, hist.total.length-maxLen);
+  const len = hist.total.length-start;
+  if(len<2) return;
+
+  function drawLine(arr, color, scaleMax) {
+    cctx.strokeStyle=color; cctx.lineWidth=2;
+    cctx.beginPath();
+    for(let i=0;i<len;i++){
+      const x = pad.l + (i/(len-1))*cw;
+      const y = pad.t + ch*(1 - arr[start+i]/scaleMax);
+      if(i===0) cctx.moveTo(x,y); else cctx.lineTo(x,y);
+    }
+    cctx.stroke();
+  }
+
+  const maxLoss = Math.max(3, ...hist.total.slice(start));
+  drawLine(hist.total, '#e94560', maxLoss);
+  drawLine(hist.ce, '#4cc9f0', maxLoss);
+  drawLine(hist.aux, '#f9c74f', maxLoss);
+
+  // Accuracy on right axis
+  cctx.strokeStyle='#90be6d'; cctx.lineWidth=2;
+  cctx.beginPath();
+  for(let i=0;i<len;i++){
+    const x = pad.l + (i/(len-1))*cw;
+    const y = pad.t + ch*(1 - hist.acc[start+i]);
+    if(i===0) cctx.moveTo(x,y); else cctx.lineTo(x,y);
+  }
+  cctx.stroke();
+
+  // Labels
+  cctx.fillStyle='#889'; cctx.font='10px sans-serif'; cctx.textAlign='right';
+  for(let i=0;i<=4;i++){
+    const v = maxLoss*(1-i/4);
+    cctx.fillText(v.toFixed(2), pad.l-4, pad.t+ch*(i/4)+3);
+  }
+  cctx.textAlign='left';
+  cctx.fillText('1.0', pad.l+cw+2, pad.t+3);
+  cctx.fillText('0.0', pad.l+cw+2, pad.t+ch+3);
+}
+
+function drawBars() {
+  const w = barCanvas.width, h = barCanvas.height;
+  bctx.clearRect(0,0,w,h);
+  const ne = sim.numExperts;
+  const total = sim.loadCounts.reduce((a,b)=>a+b,0);
+  if(total===0) return;
+
+  const pad={l:40,t:10,r:10,b:20};
+  const bw = (w-pad.l-pad.r)/ne - 8;
+  const maxH = h-pad.t-pad.b;
+
+  for(let e=0;e<ne;e++){
+    const pct = sim.loadCounts[e]/total;
+    const bh = pct * maxH;
+    const x = pad.l + e*(bw+8);
+    bctx.fillStyle=COLORS[e%COLORS.length];
+    bctx.fillRect(x, pad.t+maxH-bh, bw, bh);
+    bctx.fillStyle='#fff'; bctx.font='bold 11px sans-serif'; bctx.textAlign='center';
+    bctx.fillText((pct*100).toFixed(1)+'%', x+bw/2, pad.t+maxH-bh-6);
+    bctx.fillStyle='#889'; bctx.font='10px sans-serif';
+    bctx.fillText('E'+e, x+bw/2, pad.t+maxH+12);
+  }
+
+  // Ideal line
+  bctx.strokeStyle='#e94560'; bctx.setLineDash([4,4]); bctx.lineWidth=1;
+  const idealY = pad.t+maxH*(1-1/ne);
+  bctx.beginPath(); bctx.moveTo(pad.l, idealY); bctx.lineTo(w-pad.r, idealY); bctx.stroke();
+  bctx.setLineDash([]);
+  bctx.fillStyle='#e94560'; bctx.font='9px sans-serif'; bctx.textAlign='right';
+  bctx.fillText('理想 25%', w-pad.r, idealY-3);
+}
+
+function updateStats(res) {
+  document.getElementById('statEpoch').textContent = sim.epoch;
+  document.getElementById('statAcc').textContent = (res.acc*100).toFixed(1)+'%';
+  document.getElementById('statBal').textContent = res.std.toFixed(2)+'%';
+}
+
+function loop() {
+  if(!running) return;
+  for(let i=0;i<5;i++){
+    const res = sim.step();
+    if(sim.epoch%10===0) updateStats(res);
+  }
+  drawNetwork(); drawChart(); drawBars();
+  animId = requestAnimationFrame(loop);
+}
+
+// Controls
+document.getElementById('alphaSlider').oninput = function(){
+  sim.alpha = parseFloat(this.value);
+  document.getElementById('alphaVal').textContent = sim.alpha.toFixed(2);
+};
+document.getElementById('topkSlider').oninput = function(){
+  sim.topK = parseInt(this.value);
+  document.getElementById('topkVal').textContent = sim.topK;
+};
+document.getElementById('expertSlider').oninput = function(){
+  const ne = parseInt(this.value);
+  document.getElementById('expertVal').textContent = ne;
+  // need reset for new expert count
+};
+document.getElementById('btnTrain').onclick = function(){
+  if(running){ running=false; this.textContent='▶ 继续训练'; cancelAnimationFrame(animId); }
+  else { running=true; this.textContent='⏸ 暂停'; loop(); }
+};
+document.getElementById('btnReset').onclick = function(){
+  running=false; cancelAnimationFrame(animId);
+  const ne = parseInt(document.getElementById('expertSlider').value);
+  const tk = parseInt(document.getElementById('topkSlider').value);
+  const al = parseFloat(document.getElementById('alphaSlider').value);
+  sim = new MoESim(ne, tk, al);
+  document.getElementById('btnTrain').textContent='▶ 开始训练';
+  drawNetwork(); drawChart(); drawBars();
+  document.getElementById('statEpoch').textContent='0';
+  document.getElementById('statAcc').textContent='0%';
+  document.getElementById('statBal').textContent='--';
+};
+
+// Init
+drawNetwork(); drawChart(); drawBars();
+</script>
+</body>
+</html>
