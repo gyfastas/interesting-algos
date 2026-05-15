@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>访问所有节点的最短路径 — 状态压缩 BFS</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eaeaea;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; color: #e94560; }
+  .subtitle { color: #a0a0b0; font-size: 0.85rem; margin-bottom: 16px; }
+
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 720px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 320px;
+    background: #0f1628;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .canvas-wrap.small { height: 200px; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .ctrl-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 10px;
+  }
+  button {
+    background: #0f3460;
+    color: #eaeaea;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #1a4a80; }
+  button.primary { background: #e94560; }
+  button.primary:hover { background: #ff6077; }
+
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b0b0c0;
+    font-size: 0.8rem;
+  }
+  .slider-group label { min-width: 50px; }
+  .slider-group span.val { color: #e94560; font-weight: bold; min-width: 36px; text-align: right; }
+  input[type="range"] { accent-color: #e94560; width: 110px; }
+
+  .stats-bar {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #c0c0d0;
+  }
+  .stats-bar span.highlight { color: #e94560; font-weight: bold; }
+  .stats-bar span.ok { color: #4ade80; }
+
+  .section-title {
+    color: #e94560;
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+  }
+
+  .formula-box {
+    background: #0f1628;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 10px 0;
+    font-family: "Times New Roman", "STIX Two Math", serif;
+    font-size: 1.05rem;
+    color: #eaeaea;
+    line-height: 1.8;
+  }
+  .formula-box .big {
+    font-size: 1.25rem;
+    color: #ffd700;
+  }
+
+  .node-badge {
+    display: inline-block;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 20px;
+    font-size: 0.7rem;
+    font-weight: bold;
+    margin-right: 4px;
+  }
+  .badge-visited { background: #e94560; color: #fff; }
+  .badge-current { background: #ffd700; color: #1a1a2e; }
+  .badge-unvisited { background: #0f3460; color: #8899aa; }
+</style>
+</head>
+<body>
+
+<h1>访问所有节点的最短路径</h1>
+<div class="subtitle">LeetCode 847 · 状态压缩 BFS · 图论经典</div>
+
+<div class="panel">
+  <div class="section-title">📐 核心思想</div>
+  <div class="formula-box">
+    <div style="margin-bottom:6px;">状态 = <span class="big">(已访问集合 mask, 当前节点 u)</span></div>
+    <div style="font-size:0.95rem;color:#c0c0d0;">
+      转移: (mask, u) → (mask | 2<sup>v</sup>, v)  &nbsp;for each neighbor v of u
+    </div>
+    <div style="margin-top:8px;font-size:0.95rem;color:#c0c0d0;">
+      目标: mask = 2<sup>n</sup> − 1（所有节点都被访问）
+    </div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="section-title">图结构 & BFS 可视化</div>
+    <div class="canvas-wrap" id="graphWrap">
+      <canvas id="graphCanvas"></canvas>
+    </div>
+    <div class="ctrl-row">
+      <button class="primary" onclick="toggleBFS()" id="btnBFS">开始 BFS ▶</button>
+      <button onclick="stepBFS()">单步</button>
+      <button onclick="resetBFS()">重置</button>
+      <button onclick="randomGraph()">随机图</button>
+      <div class="slider-group">
+        <label>节点数</label>
+        <input type="range" id="nRange" min="3" max="8" value="5">
+        <span class="val" id="nVal">5</span>
+      </div>
+      <div class="slider-group">
+        <label>密度</label>
+        <input type="range" id="denseRange" min="1" max="10" value="4">
+        <span class="val" id="denseVal">4</span>
+      </div>
+    </div>
+    <div class="stats-bar">
+      <span>当前状态: <span class="highlight" id="stateMask">-</span></span>
+      <span>节点: <span class="highlight" id="stateNode">-</span></span>
+      <span>距离: <span class="highlight" id="stateDist">-</span></span>
+      <span>已探索: <span class="ok" id="exploredCount">0</span></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="section-title">状态空间搜索树</div>
+    <div class="canvas-wrap small" id="treeWrap">
+      <canvas id="treeCanvas"></canvas>
+    </div>
+    <div class="stats-bar" style="margin-top:6px;font-size:0.78rem;color:#a0a0b0;">
+      每个圆点代表一个 <code>(mask, u)</code> 状态，颜色深浅表示距离起点远近
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-title">BFS 搜索日志</div>
+  <div class="stats-bar" id="resultBar">
+    <span>最短路径长度: <span class="ok" id="answer">-</span></span>
+    <span>总状态数: <span id="totalStates">-</span></span>
+    <span>最优路径: <span id="optimalPath">-</span></span>
+  </div>
+</div>
+
+<script>
+// ==================== Graph & BFS ====================
+let n = 5;
+let graph = [];
+let nodePos = [];
+let dist = [];
+let q = [];
+let qHead = 0;
+let explored = new Set();
+let bfsRunning = false;
+let bfsTimer = null;
+let parent = {};  // for path reconstruction
+let optimalPath = [];
+let answerDist = -1;
+
+function generateGraph() {
+  n = parseInt(document.getElementById('nRange').value, 10);
+  const density = parseInt(document.getElementById('denseRange').value, 10) / 10;
+  graph = Array.from({length: n}, () => []);
+
+  // tree backbone
+  for (let i = 1; i < n; i++) {
+    const j = Math.floor(Math.random() * i);
+    graph[i].push(j); graph[j].push(i);
+  }
+  // extra edges
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (!graph[i].includes(j) && Math.random() < density) {
+        graph[i].push(j); graph[j].push(i);
+      }
+    }
+  }
+
+  // circular layout
+  nodePos = [];
+  for (let i = 0; i < n; i++) {
+    const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+    nodePos.push({
+      x: Math.cos(angle),
+      y: Math.sin(angle)
+    });
+  }
+
+  resetBFS();
+}
+
+function resetBFS() {
+  bfsRunning = false;
+  document.getElementById('btnBFS').textContent = '开始 BFS ▶';
+  if (bfsTimer) clearTimeout(bfsTimer);
+
+  dist = Array.from({length: 1 << n}, () => Array(n).fill(-1));
+  q = [];
+  qHead = 0;
+  explored = new Set();
+  parent = {};
+  optimalPath = [];
+  answerDist = -1;
+
+  for (let u = 0; u < n; u++) {
+    const mask = 1 << u;
+    dist[mask][u] = 0;
+    q.push({mask, u, d: 0});
+    explored.add(`${mask},${u}`);
+  }
+
+  document.getElementById('stateMask').textContent = '-';
+  document.getElementById('stateNode').textContent = '-';
+  document.getElementById('stateDist').textContent = '-';
+  document.getElementById('exploredCount').textContent = explored.size;
+  document.getElementById('answer').textContent = '-';
+  document.getElementById('totalStates').textContent = (1 << n) * n;
+  document.getElementById('optimalPath').textContent = '-';
+
+  drawGraph();
+  drawTree();
+}
+
+function stepBFS() {
+  if (qHead >= q.length) return;
+  if (answerDist !== -1) return;
+
+  const {mask, u, d} = q[qHead++];
+  const target = (1 << n) - 1;
+
+  document.getElementById('stateMask').textContent = mask.toString(2).padStart(n, '0');
+  document.getElementById('stateNode').textContent = u;
+  document.getElementById('stateDist').textContent = d;
+
+  if (mask === target) {
+    answerDist = d;
+    document.getElementById('answer').textContent = d;
+    reconstructPath(mask, u);
+    if (bfsRunning) toggleBFS();
+    drawGraph();
+    drawTree();
+    return;
+  }
+
+  for (let v of graph[u]) {
+    const newMask = mask | (1 << v);
+    const key = `${newMask},${v}`;
+    if (!explored.has(key)) {
+      explored.add(key);
+      dist[newMask][v] = d + 1;
+      parent[key] = {mask, u};
+      q.push({mask: newMask, u: v, d: d + 1});
+    }
+  }
+
+  document.getElementById('exploredCount').textContent = explored.size;
+  drawGraph();
+  drawTree();
+}
+
+function reconstructPath(mask, u) {
+  optimalPath = [u];
+  let key = `${mask},${u}`;
+  while (parent[key]) {
+    const p = parent[key];
+    optimalPath.unshift(p.u);
+    key = `${p.mask},${p.u}`;
+  }
+  document.getElementById('optimalPath').textContent = optimalPath.join(' → ');
+}
+
+function toggleBFS() {
+  bfsRunning = !bfsRunning;
+  document.getElementById('btnBFS').textContent = bfsRunning ? '暂停 ⏸' : '开始 BFS ▶';
+  if (bfsRunning) bfsLoop();
+}
+
+function bfsLoop() {
+  if (!bfsRunning) return;
+  stepBFS();
+  if (answerDist === -1 && qHead < q.length) {
+    bfsTimer = setTimeout(bfsLoop, 150);
+  } else {
+    bfsRunning = false;
+    document.getElementById('btnBFS').textContent = '开始 BFS ▶';
+  }
+}
+
+function randomGraph() {
+  generateGraph();
+}
+
+// ==================== Drawing ====================
+const graphWrap = document.getElementById('graphWrap');
+const graphCanvas = document.getElementById('graphCanvas');
+const graphCtx = graphCanvas.getContext('2d');
+let gW = 0, gH = 0;
+
+const treeWrap = document.getElementById('treeWrap');
+const treeCanvas = document.getElementById('treeCanvas');
+const treeCtx = treeCanvas.getContext('2d');
+let tW = 0, tH = 0;
+
+function resizeAll() {
+  const dpr = window.devicePixelRatio || 1;
+  [ [graphWrap, graphCanvas, 'g'], [treeWrap, treeCanvas, 't'] ].forEach(([wrap, canv, name]) => {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    canv.width = w * dpr; canv.height = h * dpr;
+    canv.style.width = w + 'px'; canv.style.height = h + 'px';
+    const ctx = canv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (name === 'g') { gW = w; gH = h; }
+    if (name === 't') { tW = w; tH = h; }
+  });
+}
+
+function drawGraph() {
+  graphCtx.fillStyle = '#0f1628';
+  graphCtx.fillRect(0, 0, gW, gH);
+
+  const cx = gW / 2, cy = gH / 2;
+  const radius = Math.min(gW, gH) / 2 - 40;
+
+  // edges
+  graphCtx.strokeStyle = '#1a3a5c';
+  graphCtx.lineWidth = 1.5;
+  for (let u = 0; u < n; u++) {
+    for (let v of graph[u]) {
+      if (v > u) {
+        const x1 = cx + nodePos[u].x * radius;
+        const y1 = cy + nodePos[u].y * radius;
+        const x2 = cx + nodePos[v].x * radius;
+        const y2 = cy + nodePos[v].y * radius;
+        graphCtx.beginPath(); graphCtx.moveTo(x1, y1); graphCtx.lineTo(x2, y2); graphCtx.stroke();
+      }
+    }
+  }
+
+  // highlight optimal path
+  if (optimalPath.length > 1) {
+    graphCtx.strokeStyle = '#ffd700';
+    graphCtx.lineWidth = 3;
+    graphCtx.setLineDash([5, 5]);
+    graphCtx.beginPath();
+    for (let i = 0; i < optimalPath.length; i++) {
+      const u = optimalPath[i];
+      const x = cx + nodePos[u].x * radius;
+      const y = cy + nodePos[u].y * radius;
+      if (i === 0) graphCtx.moveTo(x, y);
+      else graphCtx.lineTo(x, y);
+    }
+    graphCtx.stroke();
+    graphCtx.setLineDash([]);
+  }
+
+  // nodes
+  for (let u = 0; u < n; u++) {
+    const x = cx + nodePos[u].x * radius;
+    const y = cy + nodePos[u].y * radius;
+
+    let isVisited = false;
+    let isCurrent = false;
+    if (qHead > 0 && qHead <= q.length) {
+      const state = q[qHead - 1];
+      isVisited = (state.mask >> u) & 1;
+      isCurrent = state.u === u;
+    }
+
+    graphCtx.beginPath();
+    graphCtx.arc(x, y, 18, 0, Math.PI * 2);
+    if (isCurrent) {
+      graphCtx.fillStyle = '#ffd700';
+      graphCtx.shadowColor = '#ffd700';
+      graphCtx.shadowBlur = 15;
+    } else if (isVisited) {
+      graphCtx.fillStyle = '#e94560';
+      graphCtx.shadowColor = 'rgba(233,69,96,0.3)';
+      graphCtx.shadowBlur = 8;
+    } else {
+      graphCtx.fillStyle = '#0f3460';
+      graphCtx.shadowBlur = 0;
+    }
+    graphCtx.fill();
+    graphCtx.shadowBlur = 0;
+
+    graphCtx.strokeStyle = isCurrent ? '#ffd700' : (isVisited ? '#ff6077' : '#1a4a80');
+    graphCtx.lineWidth = 2;
+    graphCtx.stroke();
+
+    graphCtx.fillStyle = isCurrent ? '#1a1a2e' : '#eaeaea';
+    graphCtx.font = 'bold 13px sans-serif';
+    graphCtx.textAlign = 'center';
+    graphCtx.textBaseline = 'middle';
+    graphCtx.fillText(u.toString(), x, y);
+  }
+
+  // legend
+  graphCtx.font = '11px sans-serif';
+  graphCtx.textAlign = 'left';
+  graphCtx.fillStyle = '#e94560'; graphCtx.beginPath(); graphCtx.arc(14, gH - 40, 6, 0, Math.PI*2); graphCtx.fill();
+  graphCtx.fillStyle = '#a0a0b0'; graphCtx.fillText('已访问', 26, gH - 36);
+  graphCtx.fillStyle = '#ffd700'; graphCtx.beginPath(); graphCtx.arc(80, gH - 40, 6, 0, Math.PI*2); graphCtx.fill();
+  graphCtx.fillStyle = '#a0a0b0'; graphCtx.fillText('当前', 92, gH - 36);
+}
+
+function drawTree() {
+  treeCtx.fillStyle = '#0f1628';
+  treeCtx.fillRect(0, 0, tW, tH);
+
+  if (q.length === 0) return;
+
+  // Show last few states as dots
+  const visible = Math.min(q.length, 200);
+  const start = Math.max(0, q.length - visible);
+  const cols = Math.ceil(Math.sqrt(visible));
+  const cellW = tW / cols;
+  const cellH = tH / Math.ceil(visible / cols);
+
+  for (let i = start; i < q.length; i++) {
+    const idx = i - start;
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    const x = col * cellW + cellW / 2;
+    const y = row * cellH + cellH / 2;
+
+    const state = q[i];
+    const isExplored = explored.has(`${state.mask},${state.u}`);
+    const isOnPath = optimalPath.includes(state.u) && state.mask === (1 << n) - 1;
+
+    const maxDist = answerDist > 0 ? answerDist : 10;
+    const ratio = Math.min(state.d / maxDist, 1);
+    const hue = 240 - ratio * 200;
+
+    treeCtx.beginPath();
+    treeCtx.arc(x, y, Math.min(cellW, cellH) * 0.25, 0, Math.PI * 2);
+    treeCtx.fillStyle = isOnPath ? '#ffd700' : `hsl(${hue}, 70%, 50%)`;
+    treeCtx.fill();
+
+    if (i === qHead - 1) {
+      treeCtx.strokeStyle = '#ffd700';
+      treeCtx.lineWidth = 2;
+      treeCtx.stroke();
+    }
+  }
+}
+
+// ==================== Events ====================
+document.getElementById('nRange').addEventListener('input', e => {
+  document.getElementById('nVal').textContent = e.target.value;
+  generateGraph();
+});
+document.getElementById('denseRange').addEventListener('input', e => {
+  document.getElementById('denseVal').textContent = e.target.value;
+  generateGraph();
+});
+window.addEventListener('resize', () => { resizeAll(); drawGraph(); drawTree(); });
+
+// ==================== Init ====================
+resizeAll();
+generateGraph();
+</script>
+</body>
+</html>
