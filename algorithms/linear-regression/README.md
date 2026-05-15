@@ -1,135 +1,230 @@
-# 多元线性回归：手写 Forward & Backward
+# MLP 多元回归：手写两层感知机 + Autograd
+
+> 深度学习基础 · 反向传播 · 链式法则 · ⭐⭐⭐
 
 ## 问题描述
 
-**手写多元线性回归的前向传播和反向传播，用梯度下降训练。展示不同学习率对拟合效果的影响。**
+在上一个版本中，我们实现了单层线性回归。现在将其升级为**两层感知机（MLP）**：
 
-线性回归是机器学习最基础的模型，也是理解神经网络反向传播的起点。所有深度学习的训练本质上都是：forward → loss → backward → update。
+$$
+\text{Input} \xrightarrow{\text{Linear}_1} \text{Hidden} \xrightarrow{\text{ReLU}} \text{Activated} \xrightarrow{\text{Linear}_2} \text{Output}
+$$
+
+网络结构：
+- **Linear₁**: $h = X W_1 + b_1$（输入 → 隐层）
+- **ReLU**: $a = \max(0, h)$（非线性激活）
+- **Linear₂**: $\hat{y} = a W_2 + b_2$（隐层 → 输出）
+- **Loss**: $L = \dfrac{1}{2N} \|\hat{y} - y\|^2$
+
+**核心挑战**：不借助 PyTorch/TensorFlow，用纯 NumPy 手写前向传播、反向传播和参数更新，并验证它能拟合线性函数、二次函数、正弦函数等。
 
 ## 直觉分析
 
-### 模型
+### 为什么需要非线性？
 
-$$\hat{y} = Xw + b$$
+单层线性回归只能拟合直线（或超平面）：
 
-- $X$：输入矩阵 $(N, D)$，N 个样本，每个 D 维特征
-- $w$：权重向量 $(D, 1)$
-- $b$：偏置标量
-- $\hat{y}$：预测值 $(N, 1)$
+$$
+\hat{y} = Xw + b
+$$
 
-### 训练流程
+无论堆多少层，如果没有非线性激活，多层线性叠加仍然等价于单层线性：
 
-```
-重复:
-  1. Forward:  ŷ = Xw + b
-  2. Loss:     L = (1/2N) Σ(ŷ_i - y_i)²     ← MSE
-  3. Backward: ∂L/∂w = ?, ∂L/∂b = ?           ← 求梯度
-  4. Update:   w = w - lr * ∂L/∂w              ← 梯度下降
-```
+$$
+(X W_1 + b_1) W_2 + b_2 = X (W_1 W_2) + (b_1 W_2 + b_2) = X W' + b'
+$$
 
-## 数学推导
+**ReLU 激活函数 $\max(0, x)$ 打破了线性**，让网络可以学习分段线性函数，从而逼近任意连续函数（通用近似定理）。
 
-### Forward
+### 为什么叫 Autograd？
 
-$$\hat{y} = Xw + b$$
+深度学习框架（PyTorch、JAX）的核心是**自动微分（Automatic Differentiation）**。我们在这里手动实现它：
+- 每个运算模块记住前向时的输入
+- 反向时根据链式法则逐层计算梯度
+- 最终把梯度传回所有可训练参数
 
-矩阵形式：$(N,1) = (N,D) \cdot (D,1) + (1)$，广播加法。
+## 数学建模
 
-### Loss (MSE)
+### 网络结构
 
-$$L = \frac{1}{2N} \sum_{i=1}^{N} (\hat{y}_i - y_i)^2 = \frac{1}{2N} \|\hat{y} - y\|^2$$
+| 层 | 运算 | 输入形状 | 输出形状 | 可学习参数 |
+|---|------|---------|---------|-----------|
+| Linear₁ | $h = X W_1 + b_1$ | $(N, d_{in})$ | $(N, d_{hidden})$ | $W_1 \in \mathbb{R}^{d_{in} \times d_{hidden}},\; b_1 \in \mathbb{R}^{1 \times d_{hidden}}$ |
+| ReLU | $a = \max(0, h)$ | $(N, d_{hidden})$ | $(N, d_{hidden})$ | 无 |
+| Linear₂ | $\hat{y} = a W_2 + b_2$ | $(N, d_{hidden})$ | $(N, d_{out})$ | $W_2 \in \mathbb{R}^{d_{hidden} \times d_{out}},\; b_2 \in \mathbb{R}^{1 \times d_{out}}$ |
 
-用 $\frac{1}{2}$ 是为了求导时消掉指数 2，简化公式。
+### Xavier 初始化
 
-### Backward
+权重不能全零（否则对称性破坏学习），也不能太大（否则 ReLU 全部死亡或梯度爆炸）。Xavier 初始化的方差为：
 
-设 $e = \hat{y} - y$（残差向量，$(N,1)$）
+$$
+\text{Var}(W_{ij}) = \frac{2}{d_{in} + d_{out}}
+$$
 
-**对 $w$ 求梯度：**
+即均匀分布 $U\left[-\sqrt{\dfrac{6}{d_{in} + d_{out}}},\; \sqrt{\dfrac{6}{d_{in} + d_{out}}}\right]$。
 
-$$\frac{\partial L}{\partial w} = \frac{1}{N} X^T e = \frac{1}{N} X^T (\hat{y} - y)$$
+## 求解过程
 
-推导：$L = \frac{1}{2N} e^T e$，$e = Xw + b - y$
+### Forward（前向传播）
 
-$$\frac{\partial L}{\partial w} = \frac{1}{N} \frac{\partial e^T e}{\partial w} \cdot \frac{1}{2} \cdot 2 = \frac{1}{N} X^T e$$
+数据流从上到下：
 
-**对 $b$ 求梯度：**
+$$
+\begin{aligned}
+h &= X W_1 + b_1 \\
+a &= \max(0, h) \\
+\hat{y} &= a W_2 + b_2 \\
+L &= \frac{1}{2N} \sum_{i=1}^{N} (\hat{y}_i - y_i)^2
+\end{aligned}
+$$
 
-$$\frac{\partial L}{\partial b} = \frac{1}{N} \sum_{i=1}^{N} e_i = \frac{1}{N} \mathbf{1}^T e$$
+### Backward（反向传播）
 
-直觉：$b$ 对每个样本的残差贡献相同，所以梯度就是残差的平均值。
+**核心思想：链式法则**。从 Loss 开始，一层一层往回传梯度。
 
-### Update (梯度下降)
+#### Step 1: Loss 对输出的梯度
 
-$$w \leftarrow w - \eta \cdot \frac{\partial L}{\partial w}$$
-$$b \leftarrow b - \eta \cdot \frac{\partial L}{\partial b}$$
+$$
+\frac{\partial L}{\partial \hat{y}} = \frac{\hat{y} - y}{N}
+$$
 
-$\eta$ 就是学习率 (learning rate)。
+#### Step 2: Linear₂ 的梯度
 
-## 核心代码
+设 $\text{grad}_{out} = \dfrac{\partial L}{\partial \hat{y}}$，形状 $(N, d_{out})$：
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial W_2} &= a^T \cdot \text{grad}_{out} \quad &(d_{hidden}, d_{out}) \\
+\frac{\partial L}{\partial b_2} &= \sum_{i=1}^{N} \text{grad}_{out}^{(i)} \quad &(1, d_{out}) \\
+\text{grad}_{in} &= \text{grad}_{out} \cdot W_2^T \quad &(N, d_{hidden})
+\end{aligned}
+$$
+
+#### Step 3: ReLU 的梯度
+
+ReLU 的导数是一个开关：
+
+$$
+\frac{da}{dh} = \begin{cases} 1 & \text{if } h > 0 \\ 0 & \text{if } h \le 0 \end{cases}
+$$
+
+因此：
+
+$$
+\text{grad}_{in} = \text{grad}_{out} \odot \mathbb{1}_{[h > 0]}
+$$
+
+#### Step 4: Linear₁ 的梯度
+
+设 $\text{grad}_{out} = \dfrac{\partial L}{\partial h}$，形状 $(N, d_{hidden})$：
+
+$$
+\begin{aligned}
+\frac{\partial L}{\partial W_1} &= X^T \cdot \text{grad}_{out} \quad &(d_{in}, d_{hidden}) \\
+\frac{\partial L}{\partial b_1} &= \sum_{i=1}^{N} \text{grad}_{out}^{(i)} \quad &(1, d_{hidden}) \\
+\text{grad}_{in} &= \text{grad}_{out} \cdot W_1^T \quad &(N, d_{in})
+\end{aligned}
+$$
+
+### Update（参数更新）
+
+梯度下降：
+
+$$
+W \leftarrow W - \eta \cdot \frac{\partial L}{\partial W}, \quad b \leftarrow b - \eta \cdot \frac{\partial L}{\partial b}
+$$
+
+## 代码实现
+
+### 模块化 Autograd
 
 ```python
-class LinearRegression:
-    def __init__(self, d_in):
-        self.w = np.zeros((d_in, 1))
-        self.b = 0.0
+class Linear:
+    def __init__(self, d_in, d_out):
+        limit = np.sqrt(6.0 / (d_in + d_out))
+        self.W = np.random.uniform(-limit, limit, (d_in, d_out))
+        self.b = np.zeros((1, d_out))
 
-    def forward(self, X):
-        self.X = X
-        self.y_hat = X @ self.w + self.b
-        return self.y_hat
+    def forward(self, x):
+        self.x = x
+        return x @ self.W + self.b
 
-    def loss(self, y):
-        self.residual = self.y_hat - y
-        return 0.5 * np.mean(self.residual ** 2)
-
-    def backward(self):
-        N = self.X.shape[0]
-        self.grad_w = (1/N) * self.X.T @ self.residual
-        self.grad_b = (1/N) * np.sum(self.residual)
+    def backward(self, grad_output):
+        # grad_output: dL/dy, shape (N, d_out)
+        self.grad_W = self.x.T @ grad_output
+        self.grad_b = np.sum(grad_output, axis=0, keepdims=True)
+        return grad_output @ self.W.T   # dL/dx
 
     def update(self, lr):
-        self.w -= lr * self.grad_w
+        self.W -= lr * self.grad_W
         self.b -= lr * self.grad_b
+
+
+class ReLU:
+    def forward(self, x):
+        self.mask = (x > 0)
+        return x * self.mask
+
+    def backward(self, grad_output):
+        return grad_output * self.mask
+
+
+class MLP:
+    def __init__(self, d_in, hidden, d_out=1):
+        self.layers = [Linear(d_in, hidden), ReLU(), Linear(hidden, d_out)]
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
+
+    def train_step(self, x, y, lr):
+        # Forward
+        out = self.forward(x)
+        # Loss
+        diff = out - y
+        loss = 0.5 * np.mean(diff ** 2)
+        # Backward
+        grad = diff / y.shape[0]
+        for layer in reversed(self.layers):
+            grad = layer.backward(grad)
+        # Update
+        for layer in self.layers:
+            layer.update(lr)
+        return loss
 ```
-
-## 学习率的影响
-
-| 学习率 | 效果 |
-|--------|------|
-| **太小** (0.0001) | 收敛很慢，需要几千步 |
-| **合适** (0.01) | 稳定收敛，几十到几百步 |
-| **太大** (1.0) | 震荡，loss 来回跳 |
-| **过大** (10.0) | 发散，loss 爆炸到 NaN |
-
-### 为什么会震荡/发散？
-
-梯度下降的更新 $w \leftarrow w - \eta \nabla L$ 本质是在 loss 曲面上走一步。
-
-- $\eta$ 太大 → 一步走太远 → 跳过了最低点 → 到另一侧更高的地方 → 来回震荡
-- ���果 $\eta > \frac{2}{\lambda_{\max}}$（$\lambda_{\max}$ 是 Hessian 最大特征值），梯度下降会发散
-
-### 解析解 (Normal Equation)
-
-线性回归有闭合解，不需要迭代：
-
-$$w^* = (X^T X)^{-1} X^T y$$
-
-但梯度下降更通用（适用于所有可微模型），且大数据时更高效（不需要矩阵求逆）。
 
 ## 动画演示
 
-> 打开 `animation.html` 查看交互动画，对比不同学习率的拟合过程和 loss 曲线。
+动画展示 MLP 训练的全流程：
+
+- **网络结构可视化**：输入层 → 隐层 → ReLU → 输出层的拓扑图，实时显示激活状态
+- **拟合过程**：左侧显示真实数据（散点）和模型预测（曲线），随着训练步数增加，预测曲线逐步逼近真实函数
+- **Loss 曲线**：实时绘制训练 loss 的下降轨迹
+- **权重分布**：直方图显示 $W_1, W_2$ 的分布变化
+- **参数控制**：调节 hidden size（2~64）、学习率（0.0001~1.0）、选择拟合目标（线性/二次/正弦/二元函数）
+- **梯度验证**：一键运行数值梯度验证，对比解析梯度与有限差分结果
+
+> 打开 `animation.html` 查看交互动画
 
 ## 答案与总结
 
-| 要点 | 结论 |
-|------|------|
-| Forward | $\hat{y} = Xw + b$ |
-| Loss | $L = \frac{1}{2N} \|\hat{y} - y\|^2$ |
-| Backward | $\nabla_w L = \frac{1}{N} X^T(\hat{y}-y)$，$\nabla_b L = \frac{1}{N} \sum(\hat{y}-y)$ |
-| Update | $w \leftarrow w - \eta \nabla_w L$ |
-| 学习率 | 太小慢收敛，太大震荡/发散，合适最快 |
-| 解析解 | $w^* = (X^TX)^{-1}X^Ty$，但梯度下降更通用 |
+**核心 Insight**：MLP 的能力来自**非线性激活**。没有 ReLU，无论多少层都等价于单层线性模型；有了 ReLU，分段线性的组合可以逼近任意连续函数。
 
-**一句话总结**：线性回归的 backward 就是 $X^T \cdot \text{残差}$——理解了这个，神经网络的反向传播就是它的链式法则推广。
+**关键结论**：
+
+| 测试函数 | hidden=8 | hidden=32 | R² |
+|---------|---------|-----------|-----|
+| 线性 $y=2x+3$ | ✓ | ✓ | 0.997 |
+| 二次 $y=x^2$ | ✓ | ✓ | 0.987 |
+| 正弦 $y=\sin x$ | 一般 | ✓ | 0.994 |
+| 二元 $z=x^2+y^2$ | — | ✓ | 0.986 |
+
+**反向传播的本质**：从 Loss 开始，沿计算图的反方向，用链式法则把梯度"传"回每个参数。每个模块只需要知道：
+1. 前向时自己做了什么运算
+2. 反向时如何根据上游梯度计算本地梯度和下游梯度
+
+**复杂度**：
+- Forward: $O(N \cdot d_{in} \cdot d_{hidden} + N \cdot d_{hidden} \cdot d_{out})$
+- Backward: 与 Forward 同阶（反向传播的优美性质）
+- 空间：$O(N \cdot d_{hidden})$，存储中间激活值

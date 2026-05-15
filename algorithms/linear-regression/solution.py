@@ -1,226 +1,317 @@
 """
-多元线性回归 — 手写 Forward & Backward
+MLP 多元回归 — 手写 Autograd（两层 Linear + ReLU）
+=====================================================
 
-包含: 完整梯度推导 + 梯度下降训练 + 解析解对比 + 不同学习率实验
+用纯 NumPy 实现一个两层感知机：
+  Input → Linear1 → ReLU → Linear2 → Output
+
+包含:
+  - 每个运算模块的前向 + 反向传播
+  - 链式法则手动组装
+  - 数值梯度验证
+  - 四个非线性函数的拟合测试
 """
 
 import numpy as np
 
 
-# ============================================================
-# 1. 线性回归模型
-# ============================================================
-class LinearRegression:
+# =============================================================================
+# 基础运算模块（带 Autograd）
+# =============================================================================
+
+class Linear:
     """
-    多元线性回归: ŷ = Xw + b
+    全连接层: y = x @ W + b
 
-    Forward:  ŷ = X @ w + b
-    Loss:     L = (1/2N) * ||ŷ - y||²
-    Backward: ∂L/∂w = (1/N) * X^T @ (ŷ - y)
-              ∂L/∂b = (1/N) * sum(ŷ - y)
-    Update:   w -= lr * ∂L/∂w
-              b -= lr * ∂L/∂b
+    参数:
+        d_in:  输入维度
+        d_out: 输出维度
     """
+    def __init__(self, d_in: int, d_out: int):
+        # Xavier 初始化: 方差 = 2 / (d_in + d_out)
+        limit = np.sqrt(6.0 / (d_in + d_out))
+        self.W = np.random.uniform(-limit, limit, (d_in, d_out))
+        self.b = np.zeros((1, d_out))
 
-    def __init__(self, d_in: int):
-        # 零初始化 (线性回归用零初始化没问题，不像神经网络)
-        self.w = np.zeros((d_in, 1))
-        self.b = 0.0
-
-        # 缓存，backward 需要用
-        self.X = None
-        self.y_hat = None
-        self.residual = None
+        # 缓存前向输入，反向需要
+        self.x = None
 
         # 梯度
-        self.grad_w = None
-        self.grad_b = None
+        self.grad_W = np.zeros_like(self.W)
+        self.grad_b = np.zeros_like(self.b)
 
-    # ---------- Forward ----------
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        """x: (N, d_in) → y: (N, d_out)"""
+        self.x = x
+        return x @ self.W + self.b          # 广播加法
 
-    def forward(self, X: np.ndarray) -> np.ndarray:
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
         """
-        前向传播: ŷ = Xw + b
+        grad_output: dL/dy, shape (N, d_out)
 
-        X: (N, D)
-        w: (D, 1)
-        b: scalar
-        ŷ: (N, 1)
+        根据链式法则:
+          dL/dx  = grad_output @ W^T     → (N, d_out) @ (d_out, d_in) = (N, d_in)
+          dL/dW  = x^T @ grad_output     → (d_in, N) @ (N, d_out) = (d_in, d_out)
+          dL/db  = sum(grad_output, axis=0) → (1, d_out)
         """
-        self.X = X
-        self.y_hat = X @ self.w + self.b  # (N, D) @ (D, 1) + scalar = (N, 1)
-        return self.y_hat
-
-    # ---------- Loss ----------
-
-    def loss(self, y: np.ndarray) -> float:
-        """
-        MSE Loss: L = (1/2N) * ||ŷ - y||²
-
-        用 1/2 是为了求导消掉 2，简化梯度公式。
-        """
-        self.residual = self.y_hat - y     # (N, 1) 残差
-        N = y.shape[0]
-        return 0.5 * np.mean(self.residual ** 2)
-
-    # ---------- Backward ----------
-
-    def backward(self) -> None:
-        """
-        反向传播: 计算 ∂L/∂w 和 ∂L/∂b
-
-        推导:
-          L = (1/2N) * e^T @ e,  其中 e = ŷ - y = Xw + b - y
-
-          ∂L/∂w = (1/N) * X^T @ e
-            因为 ∂(e^Te)/∂w = 2 * X^T @ e，乘上 1/(2N) 的系数 → (1/N) * X^T @ e
-
-          ∂L/∂b = (1/N) * sum(e)
-            因为 b 对每个样本的贡献相同，∂e_i/∂b = 1
-        """
-        N = self.X.shape[0]
-        self.grad_w = (1 / N) * (self.X.T @ self.residual)   # (D, N) @ (N, 1) = (D, 1)
-        self.grad_b = (1 / N) * np.sum(self.residual)        # scalar
-
-    # ---------- Update ----------
+        self.grad_W = self.x.T @ grad_output       # (d_in, d_out)
+        self.grad_b = np.sum(grad_output, axis=0, keepdims=True)  # (1, d_out)
+        grad_input = grad_output @ self.W.T        # (N, d_in)
+        return grad_input
 
     def update(self, lr: float) -> None:
-        """梯度下降: w -= lr * ∂L/∂w, b -= lr * ∂L/∂b"""
-        self.w -= lr * self.grad_w
+        self.W -= lr * self.grad_W
         self.b -= lr * self.grad_b
 
-    # ---------- 完整训练步 ----------
 
-    def train_step(self, X: np.ndarray, y: np.ndarray, lr: float) -> float:
-        """一步完整训练: forward → loss → backward → update"""
-        self.forward(X)
-        l = self.loss(y)
-        self.backward()
-        self.update(lr)
+class ReLU:
+    """ReLU: y = max(0, x)"""
+    def __init__(self):
+        self.mask = None
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        self.mask = (x > 0)           # 保存正数位置
+        return x * self.mask
+
+    def backward(self, grad_output: np.ndarray) -> np.ndarray:
+        """
+        dy/dx = 1 if x > 0 else 0
+        dL/dx = dL/dy * dy/dx = grad_output * mask
+        """
+        return grad_output * self.mask
+
+    def update(self, lr: float) -> None:
+        pass  # ReLU 没有可学习参数
+
+
+class MSELoss:
+    """MSE Loss: L = 0.5 * mean((y_hat - y)^2)"""
+    def __init__(self):
+        self.y_hat = None
+        self.y = None
+
+    def forward(self, y_hat: np.ndarray, y: np.ndarray) -> float:
+        self.y_hat = y_hat
+        self.y = y
+        self.diff = y_hat - y
+        return 0.5 * np.mean(self.diff ** 2)
+
+    def backward(self) -> np.ndarray:
+        """
+        dL/dy_hat = (y_hat - y) / N
+        """
+        N = self.y_hat.shape[0]
+        return self.diff / N
+
+
+# =============================================================================
+# MLP 模型组装
+# =============================================================================
+
+class MLP:
+    """
+    两层感知机: Input → Linear(d_in, hidden) → ReLU → Linear(hidden, d_out) → Output
+    """
+    def __init__(self, d_in: int, hidden: int, d_out: int = 1):
+        self.layers = [
+            Linear(d_in, hidden),
+            ReLU(),
+            Linear(hidden, d_out),
+        ]
+        self.loss_fn = MSELoss()
+
+    def forward(self, x: np.ndarray) -> np.ndarray:
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
+
+    def loss(self, y: np.ndarray) -> float:
+        return self.loss_fn.forward(self.layers[-1].forward_cache if hasattr(self.layers[-1], 'forward_cache') else self.layers[-2].forward(self.layers[1].forward(self.layers[0].forward(self.layers[0].x))), y)
+
+    # 修正: 重新写一个完整的 backward
+    def full_backward(self, y: np.ndarray) -> None:
+        """从 loss 开始，逐层反向传播。"""
+        # 先 forward 一遍，确保所有层都有缓存
+        # 但假设 forward 已经调用过了
+        grad = self.loss_fn.backward()   # dL/dy_hat
+        # 反向遍历层
+        for layer in reversed(self.layers):
+            grad = layer.backward(grad)
+
+    def train_step(self, x: np.ndarray, y: np.ndarray, lr: float) -> float:
+        """完整的一步训练。"""
+        # Forward
+        out = self.forward(x)
+        # Loss
+        l = self.loss_fn.forward(out, y)
+        # Backward
+        grad = self.loss_fn.backward()
+        for layer in reversed(self.layers):
+            grad = layer.backward(grad)
+        # Update
+        for layer in self.layers:
+            layer.update(lr)
         return l
 
 
-# ============================================================
-# 2. 解析解 (Normal Equation)
-# ============================================================
-def normal_equation(X: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, float]:
+# =============================================================================
+# 数值梯度验证
+# =============================================================================
+
+def numerical_gradient(model: MLP, x: np.ndarray, y: np.ndarray, eps: float = 1e-5) -> float:
+    """用有限差分验证 Linear 层 W 的梯度。"""
+    # 只检查第一个 Linear 层的 W[0,0]
+    W = model.layers[0].W
+    orig = W[0, 0]
+
+    W[0, 0] = orig + eps
+    loss_plus = model.loss_fn.forward(model.forward(x), y)
+
+    W[0, 0] = orig - eps
+    loss_minus = model.loss_fn.forward(model.forward(x), y)
+
+    W[0, 0] = orig
+    num_grad = (loss_plus - loss_minus) / (2 * eps)
+
+    # 重新 forward 恢复缓存
+    model.forward(x)
+    model.loss_fn.forward(model.layers[-1].x @ model.layers[-1].W + model.layers[-1].b, y)
+    # 解析梯度
+    model.train_step(x, y, lr=0)  # 执行 backward 但不 update
+    ana_grad = model.layers[0].grad_W[0, 0]
+
+    return abs(num_grad - ana_grad)
+
+
+# =============================================================================
+# 训练与测试
+# =============================================================================
+
+def train_model(model, x, y, lr=0.01, epochs=5000, print_every=500):
+    """训练并返回 loss 历史。"""
+    losses = []
+    for epoch in range(epochs):
+        l = model.train_step(x, y, lr)
+        losses.append(l)
+        if epoch % print_every == 0 or epoch == epochs - 1:
+            print(f"  epoch {epoch:>5}: loss = {l:.6f}")
+        if np.isnan(l) or l > 1e6:
+            print(f"  ⚠ 发散于 epoch {epoch}, loss = {l}")
+            break
+    return losses
+
+
+def test_fit(name, true_fn, x, y, d_in=1, hidden=32, lr=0.01, epochs=5000):
     """
-    闭合解: w* = (X^T X)^{-1} X^T y
+    测试 MLP 拟合一个函数。
 
-    增广矩阵版本 (把 b 合并到 w 里):
-    X_aug = [X | 1]
-    w_aug = (X_aug^T X_aug)^{-1} X_aug^T y
+    参数:
+        name:     测试名称
+        true_fn:  真实函数（用于打印和对比）
+        x:        输入数据 (N, d_in)
+        y:        目标数据 (N, 1)
     """
-    N = X.shape[0]
-    X_aug = np.hstack([X, np.ones((N, 1))])   # (N, D+1)
-    # w_aug = (X_aug^T @ X_aug)^{-1} @ X_aug^T @ y
-    w_aug = np.linalg.solve(X_aug.T @ X_aug, X_aug.T @ y)
-    w = w_aug[:-1]      # (D, 1)
-    b = w_aug[-1, 0]    # scalar
-    return w, b
+    print(f"\n{'='*60}")
+    print(f"测试: {name}")
+    print(f"{'='*60}")
+    print(f"数据: N={x.shape[0]}, 输入维度={d_in}, hidden={hidden}")
+
+    model = MLP(d_in, hidden, d_out=1)
+
+    # 梯度验证
+    model.forward(x)
+    diff = numerical_gradient(model, x, y)
+    print(f"梯度验证: |num_grad - ana_grad| = {diff:.2e} {'✓' if diff < 1e-4 else '✗'}")
+
+    # 训练前 loss
+    model = MLP(d_in, hidden, d_out=1)  # 重新初始化
+    init_loss = model.loss_fn.forward(model.forward(x), y)
+    print(f"初始 loss: {init_loss:.4f}")
+
+    # 训练
+    losses = train_model(model, x, y, lr=lr, epochs=epochs)
+
+    # 最终评估
+    final_pred = model.forward(x)
+    final_loss = model.loss_fn.forward(final_pred, y)
+    mae = np.mean(np.abs(final_pred - y))
+    r2 = 1 - np.sum((final_pred - y)**2) / np.sum((y - np.mean(y))**2)
+
+    print(f"最终 loss: {final_loss:.6f}")
+    print(f"MAE: {mae:.4f}")
+    print(f"R²:  {r2:.4f}")
+    return losses, model
 
 
-# ============================================================
-# 3. 手动验证梯度 (数值梯度 vs 解析梯度)
-# ============================================================
-def check_gradient(model: LinearRegression, X: np.ndarray, y: np.ndarray, eps: float = 1e-5):
-    """
-    用有限差分验证解析梯度:
-      数值梯度 ≈ (L(w + ε) - L(w - ε)) / (2ε)
-    """
-    model.forward(X)
-    model.loss(y)
-    model.backward()
+# =============================================================================
+# 主程序
+# =============================================================================
 
-    # 检查 grad_w
-    numerical_grad_w = np.zeros_like(model.w)
-    for i in range(model.w.shape[0]):
-        old = model.w[i, 0]
-
-        model.w[i, 0] = old + eps
-        model.forward(X)
-        loss_plus = model.loss(y)
-
-        model.w[i, 0] = old - eps
-        model.forward(X)
-        loss_minus = model.loss(y)
-
-        numerical_grad_w[i, 0] = (loss_plus - loss_minus) / (2 * eps)
-        model.w[i, 0] = old
-
-    # 恢复
-    model.forward(X)
-    model.loss(y)
-
-    diff = np.max(np.abs(model.grad_w - numerical_grad_w))
-    return diff, model.grad_w.flatten(), numerical_grad_w.flatten()
-
-
-# ============================================================
-# 演示
-# ============================================================
 def demo():
     np.random.seed(42)
 
-    # 生成数据: y = 3*x1 + (-2)*x2 + 5 + noise
-    N, D = 100, 2
-    X = np.random.randn(N, D)
-    true_w = np.array([[3.0], [-2.0]])
-    true_b = 5.0
-    y = X @ true_w + true_b + np.random.randn(N, 1) * 0.5
+    print("=" * 70)
+    print("MLP 多元回归 — 手写 Autograd（两层 Linear + ReLU）")
+    print("=" * 70)
 
-    print("=" * 60)
-    print("多元线性回归 — Forward & Backward 演示")
-    print("=" * 60)
-    print(f"数据: N={N}, D={D}")
-    print(f"真实参数: w={true_w.flatten()}, b={true_b}")
+    # ---------- 测试 1: 线性函数 y = 2x + 3 ----------
+    N = 200
+    x1 = np.linspace(-3, 3, N).reshape(-1, 1)
+    y1 = 2 * x1 + 3 + np.random.randn(N, 1) * 0.2
+    losses1, model1 = test_fit("线性函数 y = 2x + 3 + noise", "y = 2x + 3", x1, y1, d_in=1, hidden=8, lr=0.05, epochs=3000)
 
-    # 1. 梯度验证
-    print(f"\n--- 梯度验证 ---")
-    model = LinearRegression(D)
-    model.w = np.random.randn(D, 1) * 0.1
-    diff, analytical, numerical = check_gradient(model, X, y)
-    print(f"解析梯度: {analytical}")
-    print(f"数值梯度: {numerical}")
-    print(f"最大差异: {diff:.2e} {'✓ 正确' if diff < 1e-6 else '✗ 有误'}")
+    # ---------- 测试 2: 二次函数 y = x^2 ----------
+    x2 = np.linspace(-2, 2, N).reshape(-1, 1)
+    y2 = x2 ** 2 + np.random.randn(N, 1) * 0.1
+    losses2, model2 = test_fit("二次函数 y = x² + noise", "y = x²", x2, y2, d_in=1, hidden=16, lr=0.02, epochs=5000)
 
-    # 2. 不同学习率对比
-    print(f"\n--- 不同学习率训练对比 ---")
-    lrs = [0.0001, 0.001, 0.01, 0.1, 1.0]
+    # ---------- 测试 3: 正弦函数 y = sin(x) ----------
+    x3 = np.linspace(-np.pi, np.pi, N).reshape(-1, 1)
+    y3 = np.sin(x3) + np.random.randn(N, 1) * 0.05
+    losses3, model3 = test_fit("正弦函数 y = sin(x) + noise", "y = sin(x)", x3, y3, d_in=1, hidden=32, lr=0.02, epochs=8000)
 
-    for lr in lrs:
-        model = LinearRegression(D)
-        losses = []
-        for epoch in range(500):
-            l = model.train_step(X, y, lr)
-            losses.append(l)
-            if np.isnan(l) or l > 1e10:
+    # ---------- 测试 4: 二元二次 z = x² + y² ----------
+    N4 = 500
+    x4_1 = np.random.uniform(-2, 2, N4)
+    x4_2 = np.random.uniform(-2, 2, N4)
+    x4 = np.column_stack([x4_1, x4_2])
+    y4 = (x4_1 ** 2 + x4_2 ** 2).reshape(-1, 1) + np.random.randn(N4, 1) * 0.2
+    losses4, model4 = test_fit("二元函数 z = x² + y² + noise", "z = x² + y²", x4, y4, d_in=2, hidden=32, lr=0.02, epochs=8000)
+
+    # ---------- 对比实验: hidden size 的影响 ----------
+    print(f"\n{'='*60}")
+    print("对比实验: hidden size 对拟合能力的影响")
+    print(f"{'='*60}")
+    print("目标: y = sin(x), 训练 5000 步, lr=0.02")
+    print(f"{'hidden':>8} | {'最终 loss':>12} | {'R²':>8}")
+    print("-" * 40)
+    for h in [2, 4, 8, 16, 32, 64]:
+        m = MLP(1, h, 1)
+        for _ in range(5000):
+            m.train_step(x3, y3, lr=0.02)
+        pred = m.forward(x3)
+        fl = 0.5 * np.mean((pred - y3) ** 2)
+        r2 = 1 - np.sum((pred - y3)**2) / np.sum((y3 - np.mean(y3))**2)
+        print(f"{h:>8} | {fl:>12.6f} | {r2:>8.4f}")
+
+    # ---------- 对比实验: 学习率的影响 ----------
+    print(f"\n{'='*60}")
+    print("对比实验: 学习率对收敛的影响")
+    print(f"{'='*60}")
+    print("目标: y = x², hidden=16, 训练 3000 步")
+    print(f"{'lr':>10} | {'最终 loss':>12} | {'状态':>10}")
+    print("-" * 40)
+    for lr in [0.0001, 0.001, 0.01, 0.1, 1.0]:
+        m = MLP(1, 16, 1)
+        loss_history = []
+        for _ in range(3000):
+            l = m.train_step(x2, y2, lr=lr)
+            loss_history.append(l)
+            if np.isnan(l) or l > 1e6:
                 break
-
-        final_loss = losses[-1]
-        status = "发散!" if np.isnan(final_loss) or final_loss > 100 else f"loss={final_loss:.4f}"
-        w_err = np.linalg.norm(model.w - true_w)
-        print(f"  lr={lr:<8} → {status:>20}  |w-w*|={w_err:.4f}  "
-              f"w=[{model.w[0,0]:.2f}, {model.w[1,0]:.2f}]  b={model.b:.2f}")
-
-    # 3. 解析解
-    print(f"\n--- 解析解 (Normal Equation) ---")
-    w_star, b_star = normal_equation(X, y)
-    print(f"w* = {w_star.flatten()}")
-    print(f"b* = {b_star:.4f}")
-    y_hat = X @ w_star + b_star
-    loss_star = 0.5 * np.mean((y_hat - y) ** 2)
-    print(f"最优 loss = {loss_star:.4f}")
-
-    # 4. 梯度下降 vs 解析解
-    print(f"\n--- 梯度下降 (lr=0.01, 1000步) vs 解析解 ---")
-    model = LinearRegression(D)
-    for _ in range(1000):
-        model.train_step(X, y, lr=0.01)
-
-    print(f"梯度下降: w=[{model.w[0,0]:.4f}, {model.w[1,0]:.4f}], b={model.b:.4f}, loss={model.train_step(X, y, 0):.4f}")
-    print(f"解析解:   w=[{w_star[0,0]:.4f}, {w_star[1,0]:.4f}], b={b_star:.4f}, loss={loss_star:.4f}")
-    print(f"差距: |w_gd - w*| = {np.linalg.norm(model.w - w_star):.6f}")
+        final_l = loss_history[-1]
+        status = "发散!" if np.isnan(final_l) or final_l > 100 else "收敛"
+        print(f"{lr:>10.4f} | {final_l:>12.6f} | {status:>10}")
 
 
 if __name__ == "__main__":

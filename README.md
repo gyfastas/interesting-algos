@@ -21,7 +21,7 @@
 | 013 | [Top-p & Top-k 采样](./algorithms/top-p-top-k/) | 解码策略、采样算法 | ⭐ |
 | 014 | [K-Means 聚类](./algorithms/k-means/) | 无监督学习、聚类算法 | ⭐ |
 | 015 | [快速排序](./algorithms/quick-sort/) | 排序、分治、Partition | ⭐⭐ |
-| 016 | [多元线性回归](./algorithms/linear-regression/) | 梯度下降、Forward & Backward | ⭐ |
+| 016 | [MLP 多元回归（两层感知机）](./algorithms/linear-regression/) | 手写 Autograd、反向传播、链式法则 | ⭐⭐⭐ |
 | 017 | [VLM DataLoader](./algorithms/vlm-dataloader/) | 多进程、生产者-消费者队列 | ⭐⭐ |
 | 018 | [VLM 训练流水线](./algorithms/vlm-training-pipeline/) | ViT 全量+LLM Micro-Batch+Recompute | ⭐⭐⭐ |
 | 019 | [寻找两个有序数组的中位数](./algorithms/median-of-two-sorted-arrays/) | 二分查找、数组 | ⭐⭐⭐⭐⭐ |
