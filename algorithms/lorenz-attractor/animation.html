@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>洛伦兹吸引子 - 交互动画</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eaeaea;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; color: #e94560; }
+  .subtitle { color: #a0a0b0; font-size: 0.85rem; margin-bottom: 16px; }
+
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 960px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 720px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 380px;
+    background: #0f1628;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .canvas-wrap.small { height: 220px; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .ctrl-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 10px;
+  }
+  button {
+    background: #0f3460;
+    color: #eaeaea;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #1a4a80; }
+  button.primary { background: #e94560; }
+  button.primary:hover { background: #ff6077; }
+
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b0b0c0;
+    font-size: 0.8rem;
+  }
+  .slider-group label { min-width: 50px; }
+  .slider-group span.val { color: #e94560; font-weight: bold; min-width: 40px; text-align: right; }
+  input[type="range"] { accent-color: #e94560; width: 120px; }
+
+  .info-text {
+    font-size: 0.8rem;
+    color: #a0a0b0;
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+  .info-text .ok { color: #4ade80; }
+  .info-text .highlight { color: #e94560; }
+
+  .section-title {
+    color: #e94560;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+  }
+</style>
+</head>
+<body>
+
+<h1>洛伦兹吸引子（Lorenz Attractor）</h1>
+<div class="subtitle">确定性混沌 · RK4 数值积分 · 交互式 3D 可视化</div>
+
+<div class="panel">
+  <div class="section-title">3D 轨迹 · 鼠标拖拽旋转</div>
+  <div class="canvas-wrap" id="mainWrap">
+    <canvas id="mainCanvas"></canvas>
+  </div>
+  <div class="ctrl-row">
+    <button class="primary" onclick="toggleMain()" id="btnMain">暂停 ⏸</button>
+    <button onclick="resetMain()">重置</button>
+    <button onclick="addParticle()">+ 发射粒子</button>
+    <button onclick="clearParticles()">清除粒子</button>
+    <div class="slider-group">
+      <label>速度</label>
+      <input type="range" id="speedRange" min="1" max="20" value="5">
+    </div>
+  </div>
+  <div class="ctrl-row">
+    <div class="slider-group"><label>σ (sigma)</label><input type="range" id="sigRange" min="1" max="30" value="10" step="0.5"><span class="val" id="sigVal">10</span></div>
+    <div class="slider-group"><label>ρ (rho)</label><input type="range" id="rhoRange" min="1" max="100" value="28" step="0.5"><span class="val" id="rhoVal">28</span></div>
+    <div class="slider-group"><label>β (beta)</label><input type="range" id="betRange" min="0.5" max="5" value="2.67" step="0.05"><span class="val" id="betVal">2.67</span></div>
+  </div>
+  <div class="info-text" id="mainInfo">
+    步数: <span class="highlight" id="stepCount">0</span> |
+    当前: x=<span id="curX">-</span>, y=<span id="curY">-</span>, z=<span id="curZ">-</span>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="panel">
+    <div class="section-title">蝴蝶效应：初始偏差 1e-10</div>
+    <div class="canvas-wrap small" id="butterflyWrap">
+      <canvas id="bfCanvas"></canvas>
+    </div>
+    <div class="info-text" id="bfInfo">偏差距离: <span class="highlight" id="bfDist">-</span></div>
+  </div>
+  <div class="panel">
+    <div class="section-title">Lyapunov 指数估算</div>
+    <div class="canvas-wrap small" id="lyapWrap">
+      <canvas id="lyapCanvas"></canvas>
+    </div>
+    <div class="info-text" id="lyapInfo">估算 λ: <span class="highlight" id="lyapVal">-</span></div>
+  </div>
+</div>
+
+<script>
+// ==================== Lorenz System ====================
+let SIGMA = 10, RHO = 28, BETA = 8/3;
+
+function lorenzRHS(x, y, z) {
+  return {
+    dx: SIGMA * (y - x),
+    dy: x * (RHO - z) - y,
+    dz: x * y - BETA * z
+  };
+}
+
+function rk4Step(state, dt) {
+  const {x, y, z} = state;
+  const k1 = lorenzRHS(x, y, z);
+  const k2 = lorenzRHS(x + 0.5*dt*k1.dx, y + 0.5*dt*k1.dy, z + 0.5*dt*k1.dz);
+  const k3 = lorenzRHS(x + 0.5*dt*k2.dx, y + 0.5*dt*k2.dy, z + 0.5*dt*k2.dz);
+  const k4 = lorenzRHS(x + dt*k3.dx, y + dt*k3.dy, z + dt*k3.dz);
+  return {
+    x: x + dt/6*(k1.dx + 2*k2.dx + 2*k3.dx + k4.dx),
+    y: y + dt/6*(k1.dy + 2*k2.dy + 2*k3.dy + k4.dy),
+    z: z + dt/6*(k1.dz + 2*k2.dz + 2*k3.dz + k4.dz)
+  };
+}
+
+// ==================== 3D Projection ====================
+function project3D(x, y, z, angleX, angleY, scale, cx, cy) {
+  // rotate around Y
+  const c1 = Math.cos(angleY), s1 = Math.sin(angleY);
+  const x1 = x * c1 - z * s1;
+  const z1 = x * s1 + z * c1;
+  // rotate around X
+  const c2 = Math.cos(angleX), s2 = Math.sin(angleX);
+  const y2 = y * c2 - z1 * s2;
+  const z2 = y * s2 + z1 * c2;
+  return {
+    x: cx + x1 * scale,
+    y: cy - y2 * scale,  // flip Y for screen coords
+    z: z2
+  };
+}
+
+// ==================== Main Canvas ====================
+const mainWrap = document.getElementById('mainWrap');
+const mainCanvas = document.getElementById('mainCanvas');
+const mainCtx = mainCanvas.getContext('2d');
+
+let mainW = 0, mainH = 0;
+let angleX = 0.3, angleY = 0.5;
+let dragging = false;
+let lastMouse = {x:0, y:0};
+let mainPlaying = true;
+let mainRaf = null;
+
+function resizeMain() {
+  const dpr = window.devicePixelRatio || 1;
+  mainW = mainWrap.clientWidth;
+  mainH = mainWrap.clientHeight;
+  mainCanvas.width = mainW * dpr;
+  mainCanvas.height = mainH * dpr;
+  mainCanvas.style.width = mainW + 'px';
+  mainCanvas.style.height = mainH + 'px';
+  mainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+mainWrap.addEventListener('mousedown', e => { dragging = true; lastMouse = {x:e.clientX, y:e.clientY}; });
+window.addEventListener('mouseup', () => dragging = false);
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastMouse.x;
+  const dy = e.clientY - lastMouse.y;
+  angleY += dx * 0.008;
+  angleX += dy * 0.008;
+  lastMouse = {x:e.clientX, y:e.clientY};
+});
+
+// Touch support
+mainWrap.addEventListener('touchstart', e => {
+  dragging = true;
+  lastMouse = {x:e.touches[0].clientX, y:e.touches[0].clientY};
+  e.preventDefault();
+}, {passive:false});
+mainWrap.addEventListener('touchmove', e => {
+  if (!dragging) return;
+  const dx = e.touches[0].clientX - lastMouse.x;
+  const dy = e.touches[0].clientY - lastMouse.y;
+  angleY += dx * 0.008;
+  angleX += dy * 0.008;
+  lastMouse = {x:e.touches[0].clientX, y:e.touches[0].clientY};
+  e.preventDefault();
+}, {passive:false});
+window.addEventListener('touchend', () => dragging = false);
+
+let particles = [];
+const MAX_TRAIL = 3000;
+const DT = 0.01;
+
+function createParticle(x, y, z) {
+  return {
+    state: {x, y, z},
+    trail: [{x, y, z}],
+    colorOffset: Math.random() * 360,
+    step: 0
+  };
+}
+
+function resetMain() {
+  particles = [createParticle(1, 1, 1)];
+}
+
+function addParticle() {
+  const x = (Math.random() - 0.5) * 10;
+  const y = (Math.random() - 0.5) * 10;
+  const z = Math.random() * 20 + 10;
+  particles.push(createParticle(x, y, z));
+}
+
+function clearParticles() {
+  if (particles.length > 0) {
+    particles = [particles[0]];
+  }
+}
+
+function drawMain() {
+  mainCtx.fillStyle = 'rgba(15,22,40,0.15)';
+  mainCtx.fillRect(0, 0, mainW, mainH);
+
+  const cx = mainW / 2;
+  const cy = mainH / 2;
+  const scale = Math.min(mainW, mainH) / 70;
+
+  particles.forEach((p, pi) => {
+    const trail = p.trail;
+    if (trail.length < 2) return;
+
+    for (let i = 1; i < trail.length; i++) {
+      const a = project3D(trail[i-1].x, trail[i-1].y, trail[i-1].z, angleX, angleY, scale, cx, cy);
+      const b = project3D(trail[i].x, trail[i].y, trail[i].z, angleX, angleY, scale, cx, cy);
+
+      // skip if behind camera
+      if (a.z < -100 || b.z < -100) continue;
+
+      const hue = (p.colorOffset + i * 0.15) % 360;
+      const alpha = Math.min(1, i / 100);
+      mainCtx.strokeStyle = `hsla(${hue}, 70%, 60%, ${alpha})`;
+      mainCtx.lineWidth = 1.5;
+      mainCtx.beginPath();
+      mainCtx.moveTo(a.x, a.y);
+      mainCtx.lineTo(b.x, b.y);
+      mainCtx.stroke();
+    }
+
+    // draw current point
+    const cur = trail[trail.length - 1];
+    const proj = project3D(cur.x, cur.y, cur.z, angleX, angleY, scale, cx, cy);
+    if (proj.z > -100) {
+      mainCtx.fillStyle = '#ffd700';
+      mainCtx.beginPath();
+      mainCtx.arc(proj.x, proj.y, 3, 0, Math.PI*2);
+      mainCtx.fill();
+    }
+  });
+
+  // axes
+  const origin = project3D(0, 0, 0, angleX, angleY, scale, cx, cy);
+  const xAxis = project3D(25, 0, 0, angleX, angleY, scale, cx, cy);
+  const yAxis = project3D(0, 25, 0, angleX, angleY, scale, cx, cy);
+  const zAxis = project3D(0, 0, 25, angleX, angleY, scale, cx, cy);
+  [[origin,xAxis,'#e94560','x'], [origin,yAxis,'#4ade80','y'], [origin,zAxis,'#60a5fa','z']].forEach(([a,b,color,label]) => {
+    mainCtx.strokeStyle = color;
+    mainCtx.lineWidth = 1;
+    mainCtx.beginPath(); mainCtx.moveTo(a.x,a.y); mainCtx.lineTo(b.x,b.y); mainCtx.stroke();
+    mainCtx.fillStyle = color;
+    mainCtx.font = '12px sans-serif';
+    mainCtx.fillText(label, b.x+4, b.y);
+  });
+}
+
+function updateMain() {
+  const speed = parseInt(document.getElementById('speedRange').value, 10);
+  for (let s = 0; s < speed; s++) {
+    particles.forEach(p => {
+      p.state = rk4Step(p.state, DT);
+      p.trail.push({x: p.state.x, y: p.state.y, z: p.state.z});
+      if (p.trail.length > MAX_TRAIL) p.trail.shift();
+      p.step++;
+    });
+  }
+
+  // update info
+  if (particles.length > 0) {
+    const p = particles[0];
+    document.getElementById('stepCount').textContent = p.step;
+    document.getElementById('curX').textContent = p.state.x.toFixed(2);
+    document.getElementById('curY').textContent = p.state.y.toFixed(2);
+    document.getElementById('curZ').textContent = p.state.z.toFixed(2);
+  }
+}
+
+function mainLoop() {
+  if (mainPlaying) {
+    updateMain();
+    drawMain();
+  }
+  mainRaf = requestAnimationFrame(mainLoop);
+}
+
+function toggleMain() {
+  mainPlaying = !mainPlaying;
+  document.getElementById('btnMain').textContent = mainPlaying ? '暂停 ⏸' : '播放 ▶';
+}
+
+// ==================== Butterfly Effect ====================
+const bfWrap = document.getElementById('butterflyWrap');
+const bfCanvas = document.getElementById('bfCanvas');
+const bfCtx = bfCanvas.getContext('2d');
+let bfW = 0, bfH = 0;
+
+let bfState1 = {x:1, y:1, z:1};
+let bfState2 = {x:1+1e-10, y:1, z:1};
+let bfTrail1 = [];
+let bfTrail2 = [];
+let bfDists = [];
+let bfStep = 0;
+const BF_MAX = 1500;
+
+function resizeBF() {
+  const dpr = window.devicePixelRatio || 1;
+  bfW = bfWrap.clientWidth;
+  bfH = bfWrap.clientHeight;
+  bfCanvas.width = bfW * dpr;
+  bfCanvas.height = bfH * dpr;
+  bfCanvas.style.width = bfW + 'px';
+  bfCanvas.style.height = bfH + 'px';
+  bfCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawBF() {
+  bfCtx.fillStyle = '#0f1628';
+  bfCtx.fillRect(0, 0, bfW, bfH);
+
+  const cx = bfW / 2;
+  const cy = bfH / 2;
+  const sc = Math.min(bfW, bfH) / 70;
+
+  // draw trails
+  const drawTrail = (trail, color) => {
+    if (trail.length < 2) return;
+    bfCtx.strokeStyle = color;
+    bfCtx.lineWidth = 1.2;
+    bfCtx.beginPath();
+    for (let i = 0; i < trail.length; i++) {
+      const pt = project3D(trail[i].x, trail[i].y, trail[i].z, 0.3, 0.5, sc, cx, cy);
+      if (i === 0) bfCtx.moveTo(pt.x, pt.y);
+      else bfCtx.lineTo(pt.x, pt.y);
+    }
+    bfCtx.stroke();
+  };
+
+  drawTrail(bfTrail1, 'rgba(233,69,96,0.6)');
+  drawTrail(bfTrail2, 'rgba(74,222,128,0.6)');
+}
+
+function updateBF() {
+  for (let i = 0; i < 3; i++) {
+    bfState1 = rk4Step(bfState1, DT);
+    bfState2 = rk4Step(bfState2, DT);
+    bfTrail1.push({x: bfState1.x, y: bfState1.y, z: bfState1.z});
+    bfTrail2.push({x: bfState2.x, y: bfState2.y, z: bfState2.z});
+    if (bfTrail1.length > BF_MAX) bfTrail1.shift();
+    if (bfTrail2.length > BF_MAX) bfTrail2.shift();
+
+    const dx = bfState1.x - bfState2.x;
+    const dy = bfState1.y - bfState2.y;
+    const dz = bfState1.z - bfState2.z;
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    bfDists.push(dist);
+    if (bfDists.length > BF_MAX) bfDists.shift();
+    bfStep++;
+  }
+  document.getElementById('bfDist').textContent = bfDists[bfDists.length-1].toExponential(3);
+}
+
+// ==================== Lyapunov Canvas ====================
+const lyapWrap = document.getElementById('lyapWrap');
+const lyapCanvas = document.getElementById('lyapCanvas');
+const lyapCtx = lyapCanvas.getContext('2d');
+let lyapW = 0, lyapH = 0;
+
+let lyapRef = {x:1, y:1, z:1};
+let lyapPert = {x:1+1e-10, y:1, z:1};
+let lyapLogs = [];
+let lyapStep = 0;
+let lyapSum = 0;
+let lyapCount = 0;
+const PERT = 1e-10;
+const RESCALE = 10;
+
+function resizeLyap() {
+  const dpr = window.devicePixelRatio || 1;
+  lyapW = lyapWrap.clientWidth;
+  lyapH = lyapWrap.clientHeight;
+  lyapCanvas.width = lyapW * dpr;
+  lyapCanvas.height = lyapH * dpr;
+  lyapCanvas.style.width = lyapW + 'px';
+  lyapCanvas.style.height = lyapH + 'px';
+  lyapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawLyap() {
+  lyapCtx.fillStyle = '#0f1628';
+  lyapCtx.fillRect(0, 0, lyapW, lyapH);
+
+  if (lyapLogs.length < 2) return;
+
+  // draw log(distance) curve
+  lyapCtx.strokeStyle = '#e94560';
+  lyapCtx.lineWidth = 1.5;
+  lyapCtx.beginPath();
+  const maxLog = Math.max(...lyapLogs, 1);
+  const minLog = Math.min(...lyapLogs, -20);
+  for (let i = 0; i < lyapLogs.length; i++) {
+    const x = (i / (lyapLogs.length - 1)) * lyapW;
+    const y = lyapH - ((lyapLogs[i] - minLog) / (maxLog - minLog + 1)) * (lyapH - 20) - 10;
+    if (i === 0) lyapCtx.moveTo(x, y);
+    else lyapCtx.lineTo(x, y);
+  }
+  lyapCtx.stroke();
+
+  // theoretical slope line
+  lyapCtx.strokeStyle = 'rgba(74,222,128,0.5)';
+  lyapCtx.setLineDash([4, 4]);
+  lyapCtx.beginPath();
+  const lambda = 0.906;
+  const t0 = 0;
+  const t1 = lyapLogs.length * DT * 3;
+  const y0 = lyapH - ((-20 - minLog) / (maxLog - minLog + 1)) * (lyapH - 20) - 10;
+  const y1 = lyapH - ((-20 + lambda * t1) - minLog) / (maxLog - minLog + 1) * (lyapH - 20) - 10;
+  lyapCtx.moveTo(0, y0);
+  lyapCtx.lineTo(lyapW, y1);
+  lyapCtx.stroke();
+  lyapCtx.setLineDash([]);
+
+  lyapCtx.fillStyle = '#4ade80';
+  lyapCtx.font = '11px sans-serif';
+  lyapCtx.fillText('理论斜率 λ≈0.906', lyapW - 110, 16);
+}
+
+function updateLyap() {
+  for (let i = 0; i < 3; i++) {
+    lyapRef = rk4Step(lyapRef, DT);
+    lyapPert = rk4Step(lyapPert, DT);
+    lyapStep++;
+
+    if (lyapStep % RESCALE === 0) {
+      const dx = lyapPert.x - lyapRef.x;
+      const dy = lyapPert.y - lyapRef.y;
+      const dz = lyapPert.z - lyapRef.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist > 1e-15) {
+        lyapLogs.push(Math.log(dist));
+        lyapSum += Math.log(dist / PERT);
+        lyapCount++;
+      }
+      // rescale
+      const scale = PERT / Math.max(dist, 1e-15);
+      lyapPert = {
+        x: lyapRef.x + dx * scale,
+        y: lyapRef.y + dy * scale,
+        z: lyapRef.z + dz * scale
+      };
+      if (lyapLogs.length > 800) lyapLogs.shift();
+    }
+  }
+  const lambda = lyapSum / (lyapCount * RESCALE * DT);
+  document.getElementById('lyapVal').textContent = isFinite(lambda) ? lambda.toFixed(3) : '-';
+}
+
+// ==================== Parameter Sliders ====================
+document.getElementById('sigRange').addEventListener('input', e => {
+  SIGMA = parseFloat(e.target.value);
+  document.getElementById('sigVal').textContent = SIGMA;
+});
+document.getElementById('rhoRange').addEventListener('input', e => {
+  RHO = parseFloat(e.target.value);
+  document.getElementById('rhoVal').textContent = RHO;
+});
+document.getElementById('betRange').addEventListener('input', e => {
+  BETA = parseFloat(e.target.value);
+  document.getElementById('betVal').textContent = BETA.toFixed(2);
+});
+
+// ==================== Global Loop ====================
+function globalLoop() {
+  if (mainPlaying) {
+    updateBF();
+    updateLyap();
+  }
+  drawBF();
+  drawLyap();
+  requestAnimationFrame(globalLoop);
+}
+
+// ==================== Resize Handling ====================
+window.addEventListener('resize', () => {
+  resizeMain();
+  resizeBF();
+  resizeLyap();
+});
+
+// ==================== Init ====================
+resizeMain();
+resizeBF();
+resizeLyap();
+resetMain();
+mainLoop();
+globalLoop();
+</script>
+</body>
+</html>

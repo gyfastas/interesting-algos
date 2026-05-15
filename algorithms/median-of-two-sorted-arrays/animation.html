@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>寻找两个有序数组的中位数 - 交互动画</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eaeaea;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 8px; color: #e94560; }
+  .subtitle { color: #a0a0b0; font-size: 0.9rem; margin-bottom: 20px; }
+
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .input-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .input-row label { color: #b0b0c0; font-size: 0.85rem; min-width: 60px; }
+  .input-row input {
+    flex: 1;
+    min-width: 180px;
+    background: #0f3460;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    color: #eaeaea;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    font-family: "Consolas", "Fira Code", monospace;
+  }
+  .input-row input:focus { outline: none; border-color: #e94560; }
+
+  .btn-bar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 10px;
+  }
+  button {
+    background: #0f3460;
+    color: #eaeaea;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #1a4a80; }
+  button.primary { background: #e94560; }
+  button.primary:hover { background: #ff6077; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .speed-wrap { display: flex; align-items: center; gap: 8px; color: #b0b0c0; font-size: 0.85rem; }
+  input[type="range"] { accent-color: #e94560; }
+
+  .canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 320px;
+    background: #0f1628;
+    border-radius: 10px;
+    margin-top: 16px;
+    overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  .info-bar {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    font-size: 0.85rem;
+    color: #c0c0d0;
+  }
+  .info-bar span { font-family: "Consolas", monospace; }
+  .info-bar .highlight { color: #e94560; font-weight: bold; }
+  .info-bar .ok { color: #4ade80; }
+
+  .log {
+    background: #0f1628;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 12px;
+    max-height: 160px;
+    overflow-y: auto;
+    font-family: "Consolas", monospace;
+    font-size: 0.8rem;
+    color: #a0a0b0;
+    line-height: 1.5;
+  }
+  .log .step-num { color: #e94560; margin-right: 6px; }
+  .log .cond-ok { color: #4ade80; }
+  .log .cond-fail { color: #f87171; }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: #a0a0b0;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-box { width: 14px; height: 14px; border-radius: 3px; }
+
+  .mc-panel { margin-top: 12px; }
+  .mc-result { font-size: 0.85rem; color: #c0c0d0; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>寻找两个有序数组的中位数</h1>
+<div class="subtitle">二分查找分割点 · 交互动画演示</div>
+
+<div class="panel">
+  <div class="input-row">
+    <label>nums1</label>
+    <input id="in1" type="text" value="1, 3, 8, 9, 15">
+  </div>
+  <div class="input-row">
+    <label>nums2</label>
+    <input id="in2" type="text" value="7, 11, 18, 19, 21, 25">
+  </div>
+  <div class="btn-bar">
+    <button class="primary" onclick="runDemo()">运行演示</button>
+    <button onclick="stepNext()" id="btnStep">单步 &gt;</button>
+    <button onclick="togglePlay()" id="btnPlay">自动播放 ▶</button>
+    <button onclick="resetDemo()">重置</button>
+    <button onclick="randomCase()">随机数据</button>
+    <div class="speed-wrap">
+      <label>速度</label>
+      <input id="speedRange" type="range" min="1" max="10" value="5">
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-box" style="background:#e94560"></div>左半部分</div>
+    <div class="legend-item"><div class="legend-box" style="background:#0f3460;border:1px solid #4a6fa5"></div>右半部分</div>
+    <div class="legend-item"><div class="legend-box" style="background:#ffd700"></div>左最大值</div>
+    <div class="legend-item"><div class="legend-box" style="background:#4ade80"></div>右最小值</div>
+  </div>
+
+  <div class="canvas-wrap">
+    <canvas id="vis"></canvas>
+  </div>
+
+  <div class="info-bar" id="infoBar">
+    <span>i = <span class="highlight" id="dispI">-</span></span>
+    <span>j = <span class="highlight" id="dispJ">-</span></span>
+    <span>lo = <span id="dispLo">-</span></span>
+    <span>hi = <span id="dispHi">-</span></span>
+    <span>中位数 = <span class="highlight" id="dispMed">-</span></span>
+  </div>
+
+  <div class="log" id="logBox"></div>
+</div>
+
+<div class="panel mc-panel">
+  <h3 style="color:#e94560;margin-bottom:10px;font-size:1rem;">Monte Carlo 随机测试</h3>
+  <div class="btn-bar">
+    <button class="primary" onclick="runMonteCarlo()">开始 1000 轮测试</button>
+    <button onclick="stopMonteCarlo()">停止</button>
+  </div>
+  <div class="mc-result" id="mcResult"></div>
+</div>
+
+<div class="panel">
+  <h3 style="color:#e94560;margin-bottom:10px;font-size:1rem;">扩展：K 个有序数组 — 值域二分演示</h3>
+  <div class="input-row">
+    <label>K</label>
+    <input id="kCount" type="number" value="3" min="2" max="6" style="min-width:60px;flex:0;width:70px;">
+    <button onclick="generateKArrays()">随机生成 K 个数组</button>
+  </div>
+  <div id="kInputs"></div>
+  <div class="btn-bar">
+    <button class="primary" onclick="runKDemo()">运行值域二分</button>
+    <button onclick="stepKNext()">单步 &gt;</button>
+    <button onclick="toggleKPlay()" id="btnKPlay">自动播放 ▶</button>
+    <button onclick="resetKDemo()">重置</button>
+  </div>
+  <div class="canvas-wrap" id="kCanvasWrap" style="height:280px;margin-top:14px;">
+    <canvas id="kVis"></canvas>
+  </div>
+  <div class="info-bar" id="kInfoBar">
+    <span>lo = -</span>
+    <span>hi = -</span>
+    <span>mid = -</span>
+    <span>cnt = -</span>
+  </div>
+</div>
+
+<script>
+/* ========== Core Algorithm (mirrors solution.py) ========== */
+function parseInput(str) {
+  str = str.trim();
+  if (!str) return [];
+  return str.split(/[,，\s]+/).map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+}
+
+function findMedian(nums1, nums2, hooks) {
+  if (nums1.length > nums2.length) [nums1, nums2] = [nums2, nums1];
+  const m = nums1.length, n = nums2.length;
+  const totalLeft = Math.floor((m + n + 1) / 2);
+  let lo = 0, hi = m;
+  const steps = [];
+
+  while (lo <= hi) {
+    const i = Math.floor((lo + hi) / 2);
+    const j = totalLeft - i;
+
+    const n1LM = i === 0 ? -Infinity : nums1[i - 1];
+    const n1RM = i === m ? Infinity : nums1[i];
+    const n2LM = j === 0 ? -Infinity : nums2[j - 1];
+    const n2RM = j === n ? Infinity : nums2[j];
+
+    const ok1 = n1LM <= n2RM;
+    const ok2 = n2LM <= n1RM;
+
+    steps.push({ i, j, lo, hi, n1LM, n1RM, n2LM, n2RM, ok1, ok2, done: ok1 && ok2 });
+
+    if (ok1 && ok2) {
+      if ((m + n) % 2 === 1) {
+        return { median: Math.max(n1LM, n2LM), steps };
+      } else {
+        return { median: (Math.max(n1LM, n2LM) + Math.min(n1RM, n2RM)) / 2, steps };
+      }
+    } else if (!ok1) {
+      hi = i - 1;
+    } else {
+      lo = i + 1;
+    }
+  }
+  return { median: null, steps };
+}
+
+/* ========== Visualization ========== */
+const canvas = document.getElementById('vis');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  W = canvas.width;
+  H = canvas.height;
+  ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  W /= window.devicePixelRatio;
+  H /= window.devicePixelRatio;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+let nums1 = [], nums2 = [];
+let steps = [];
+let curStepIdx = -1;
+let playing = false;
+let playTimer = null;
+let medianVal = null;
+
+function setDefault() {
+  document.getElementById('in1').value = '1, 3, 8, 9, 15';
+  document.getElementById('in2').value = '7, 11, 18, 19, 21, 25';
+}
+
+function randomCase() {
+  const randArr = (len, min, max) => Array.from({length: len}, () => Math.floor(Math.random()*(max-min)+min)).sort((a,b)=>a-b);
+  const len1 = Math.floor(Math.random()*8)+1;
+  const len2 = Math.floor(Math.random()*8)+1;
+  nums1 = randArr(len1, 1, 50);
+  nums2 = randArr(len2, 1, 50);
+  document.getElementById('in1').value = nums1.join(', ');
+  document.getElementById('in2').value = nums2.join(', ');
+  resetDemo();
+  runDemo();
+}
+
+function runDemo() {
+  nums1 = parseInput(document.getElementById('in1').value);
+  nums2 = parseInput(document.getElementById('in2').value);
+  if (!nums1.length && !nums2.length) { alert('至少一个数组非空'); return; }
+  const res = findMedian(nums1.slice(), nums2.slice());
+  steps = res.steps;
+  medianVal = res.median;
+  curStepIdx = -1;
+  logBox.innerHTML = '';
+  draw();
+  updateInfo();
+  if (playing) { stopPlay(); }
+}
+
+function stepNext() {
+  if (steps.length === 0) runDemo();
+  if (curStepIdx < steps.length - 1) {
+    curStepIdx++;
+    addLog(steps[curStepIdx], curStepIdx);
+    draw();
+    updateInfo();
+    if (steps[curStepIdx].done && playing) {
+      stopPlay();
+    }
+  }
+}
+
+function togglePlay() {
+  if (playing) { stopPlay(); return; }
+  if (steps.length === 0) runDemo();
+  playing = true;
+  document.getElementById('btnPlay').textContent = '暂停 ⏸';
+  playLoop();
+}
+
+function stopPlay() {
+  playing = false;
+  document.getElementById('btnPlay').textContent = '自动播放 ▶';
+  if (playTimer) clearTimeout(playTimer);
+}
+
+function playLoop() {
+  if (!playing) return;
+  if (curStepIdx >= steps.length - 1) { stopPlay(); return; }
+  stepNext();
+  const spd = 1100 - parseInt(document.getElementById('speedRange').value, 10) * 100;
+  playTimer = setTimeout(playLoop, spd);
+}
+
+function resetDemo() {
+  stopPlay();
+  curStepIdx = -1;
+  steps = [];
+  medianVal = null;
+  logBox.innerHTML = '';
+  draw();
+  updateInfo();
+}
+
+function updateInfo() {
+  const s = curStepIdx >= 0 ? steps[curStepIdx] : null;
+  document.getElementById('dispI').textContent = s ? s.i : '-';
+  document.getElementById('dispJ').textContent = s ? s.j : '-';
+  document.getElementById('dispLo').textContent = s ? s.lo : '-';
+  document.getElementById('dispHi').textContent = s ? s.hi : '-';
+  document.getElementById('dispMed').textContent = medianVal !== null ? medianVal.toFixed(2) : '-';
+}
+
+const logBox = document.getElementById('logBox');
+function addLog(step, idx) {
+  const div = document.createElement('div');
+  let cond = '';
+  if (step.done) {
+    cond = '<span class="cond-ok">✓ 分割正确，中位数 = ' + medianVal.toFixed(2) + '</span>';
+  } else if (!step.ok1) {
+    cond = '<span class="cond-fail">✗ nums1_left_max(' + step.n1LM + ') > nums2_right_min(' + step.n2RM + ') → hi = ' + (step.i - 1) + '</span>';
+  } else {
+    cond = '<span class="cond-fail">✗ nums2_left_max(' + step.n2LM + ') > nums1_right_min(' + step.n1RM + ') → lo = ' + (step.i + 1) + '</span>';
+  }
+  div.innerHTML = '<span class="step-num">#' + (idx+1) + '</span> i=' + step.i + ', j=' + step.j + ' | ' + cond;
+  logBox.appendChild(div);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+/* ========== Drawing ========== */
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  if (!nums1.length && !nums2.length) return;
+
+  const all = [...nums1, ...nums2];
+  const minV = Math.min(...all), maxV = Math.max(...all);
+  const valRange = Math.max(maxV - minV, 1);
+
+  const topMargin = 30, bottomMargin = 30, leftMargin = 20, rightMargin = 20;
+  const row1Y = topMargin + 60;
+  const row2Y = topMargin + 160;
+  const barH = 40;
+
+  // max bar width
+  const maxBarW = (W - leftMargin - rightMargin) / Math.max(nums1.length, nums2.length, 1) - 6;
+  const unitW = Math.min(maxBarW, 60);
+
+  function drawArray(arr, yBase, label, step) {
+    ctx.fillStyle = '#8899aa';
+    ctx.font = '12px "Segoe UI", sans-serif';
+    ctx.fillText(label, 10, yBase - 16);
+
+    const totalW = arr.length * unitW + (arr.length - 1) * 6;
+    const startX = (W - totalW) / 2;
+
+    for (let idx = 0; idx < arr.length; idx++) {
+      const x = startX + idx * (unitW + 6);
+      const v = arr[idx];
+      const h = ((v - minV) / valRange) * barH + 10;
+
+      let left = false, right = false;
+      let isLeftMax = false, isRightMin = false;
+
+      if (label === 'nums1' && step) {
+        left = idx < step.i;
+        right = idx >= step.i;
+        isLeftMax = (idx === step.i - 1);
+        isRightMin = (idx === step.i);
+      } else if (label === 'nums2' && step) {
+        left = idx < step.j;
+        right = idx >= step.j;
+        isLeftMax = (idx === step.j - 1);
+        isRightMin = (idx === step.j);
+      }
+
+      // bar background
+      ctx.fillStyle = left ? '#e94560' : '#1a3a5c';
+      if (isLeftMax) ctx.fillStyle = '#ffd700';
+      if (isRightMin) ctx.fillStyle = '#4ade80';
+
+      // border for right part
+      if (right && !isRightMin) {
+        ctx.strokeStyle = '#4a6fa5';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, yBase - h, unitW, h);
+        ctx.fillStyle = 'rgba(15,52,96,0.4)';
+      }
+
+      ctx.fillRect(x, yBase - h, unitW, h);
+
+      // value text
+      ctx.fillStyle = '#eaeaea';
+      ctx.font = '12px "Consolas", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(v, x + unitW/2, yBase + 14);
+      ctx.textAlign = 'left';
+    }
+
+    // cut line
+    if (step) {
+      const cutIdx = label === 'nums1' ? step.i : step.j;
+      const cutX = startX + cutIdx * (unitW + 6);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(cutX, yBase - barH - 20);
+      ctx.lineTo(cutX, yBase + 22);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // label i/j
+      ctx.fillStyle = '#e94560';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.fillText(label === 'nums1' ? 'i' : 'j', cutX - 4, yBase - barH - 26);
+    }
+  }
+
+  const step = curStepIdx >= 0 ? steps[curStepIdx] : null;
+  drawArray(nums1, row1Y, 'nums1', step);
+  drawArray(nums2, row2Y, 'nums2', step);
+
+  // condition text overlay
+  if (step) {
+    ctx.font = '13px "Segoe UI", sans-serif';
+    let txt = '';
+    if (step.done) {
+      ctx.fillStyle = '#4ade80';
+      txt = '✓ 分割正确';
+    } else if (!step.ok1) {
+      ctx.fillStyle = '#f87171';
+      txt = '✗ nums1_left_max > nums2_right_min';
+    } else {
+      ctx.fillStyle = '#f87171';
+      txt = '✗ nums2_left_max > nums1_right_min';
+    }
+    ctx.fillText(txt, 12, H - 10);
+  }
+}
+
+/* ========== Monte Carlo ========== */
+let mcRunning = false;
+let mcReq = null;
+
+function runMonteCarlo() {
+  if (mcRunning) return;
+  mcRunning = true;
+  const el = document.getElementById('mcResult');
+  let passed = 0, total = 0;
+  const batch = 1000;
+
+  function loop() {
+    if (!mcRunning) return;
+    for (let k = 0; k < 50 && total < batch; k++) {
+      total++;
+      const ra = () => Array.from({length: Math.floor(Math.random()*15)+1}, () => Math.floor(Math.random()*200)-100).sort((a,b)=>a-b);
+      const a1 = ra(), a2 = ra();
+      const fast = findMedian(a1.slice(), a2.slice()).median;
+      const merged = a1.concat(a2).sort((a,b)=>a-b);
+      const L = merged.length;
+      const slow = L % 2 === 1 ? merged[Math.floor(L/2)] : (merged[L/2-1] + merged[L/2]) / 2;
+      if (Math.abs(fast - slow) < 1e-9) passed++;
+    }
+    el.innerHTML = '进度: ' + total + ' / ' + batch + ' &nbsp;|&nbsp; 通过: ' + passed + ' &nbsp;|&nbsp; 失败: ' + (total - passed);
+    if (total < batch) {
+      mcReq = requestAnimationFrame(loop);
+    } else {
+      mcRunning = false;
+      el.innerHTML += total === passed ? ' &nbsp;<span style="color:#4ade80">全部通过！</span>' : '';
+    }
+  }
+  loop();
+}
+
+function stopMonteCarlo() {
+  mcRunning = false;
+  if (mcReq) cancelAnimationFrame(mcReq);
+}
+
+/* ========== K Arrays Visualization ========== */
+const kVisCanvas = document.getElementById('kVis');
+let kArrays = [];
+let kSteps = [];
+let kStepIdx = -1;
+let kPlaying = false;
+let kPlayTimer = null;
+
+function kCountLessEqual(arr, target) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (arr[mid] <= target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function kMedianBinarySearchSteps(arrays) {
+  arrays = arrays.filter(a => a.length > 0);
+  const total = arrays.reduce((s, a) => s + a.length, 0);
+  const low = Math.min(...arrays.map(a => a[0]));
+  const high = Math.max(...arrays.map(a => a[a.length - 1]));
+  const steps = [];
+
+  function findKth(k) {
+    let lo = low, hi = high;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const cnts = arrays.map(a => kCountLessEqual(a, mid));
+      const cnt = cnts.reduce((s, c) => s + c, 0);
+      steps.push({ lo, hi, mid, cnts, cnt, targetK: k, total });
+      if (cnt < k) lo = mid + 1;
+      else hi = mid;
+    }
+    const finalCnts = arrays.map(a => kCountLessEqual(a, lo));
+    steps.push({ lo, hi: lo, mid: lo, cnts: finalCnts, cnt: finalCnts.reduce((s,c)=>s+c,0), targetK: k, total, done: true });
+    return lo;
+  }
+
+  if (total % 2 === 1) {
+    const med = findKth(Math.floor(total / 2) + 1);
+    return { median: med, steps };
+  } else {
+    const left = findKth(total / 2);
+    const right = findKth(total / 2 + 1);
+    return { median: (left + right) / 2, steps };
+  }
+}
+
+function setupKCanvas() {
+  const wrap = document.getElementById('kCanvasWrap');
+  if (!wrap || !kVisCanvas) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth;
+  const h = wrap.clientHeight;
+  kVisCanvas.width = w * dpr;
+  kVisCanvas.height = h * dpr;
+  kVisCanvas.style.width = w + 'px';
+  kVisCanvas.style.height = h + 'px';
+  const ctx = kVisCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+function drawKArrays() {
+  const wrap = document.getElementById('kCanvasWrap');
+  if (!wrap) return;
+  const ctx = setupKCanvas();
+  if (!ctx) return;
+  const W = wrap.clientWidth;
+  const H = wrap.clientHeight;
+  ctx.clearRect(0, 0, W, H);
+
+  if (kArrays.length === 0) return;
+
+  const all = kArrays.flat();
+  const minV = Math.min(...all), maxV = Math.max(...all);
+  const range = Math.max(maxV - minV, 1);
+
+  const step = kStepIdx >= 0 ? kSteps[kStepIdx] : null;
+  const marginX = 20, marginY = 24;
+  const rowH = (H - marginY * 2) / Math.max(kArrays.length, 1);
+  const maxLen = Math.max(...kArrays.map(a => a.length), 1);
+  const cellW = Math.min((W - marginX * 2 - 50) / maxLen, 38);
+
+  kArrays.forEach((arr, ri) => {
+    const y = marginY + ri * rowH + rowH / 2;
+    ctx.fillStyle = '#8899aa';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('arr' + (ri + 1), 4, y - 6);
+
+    const startX = marginX + 40;
+    arr.forEach((v, ci) => {
+      const x = startX + ci * (cellW + 4);
+      const h = ((v - minV) / range) * 18 + 6;
+
+      let highlight = false;
+      if (step) {
+        highlight = v <= step.mid;
+      }
+
+      ctx.fillStyle = highlight ? '#e94560' : '#1a3a5c';
+      if (step && v === step.mid) ctx.fillStyle = '#ffd700';
+      ctx.fillRect(x, y - h / 2, cellW, h);
+
+      ctx.fillStyle = '#eaeaea';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(v, x + cellW / 2, y + 14);
+      ctx.textAlign = 'left';
+    });
+
+    if (step) {
+      const cnt = kCountLessEqual(arr, step.mid);
+      ctx.fillStyle = '#4ade80';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('≤mid: ' + cnt, startX + arr.length * (cellW + 4) + 6, y + 4);
+    }
+  });
+
+  if (step) {
+    ctx.fillStyle = step.done ? '#4ade80' : '#f87171';
+    ctx.font = 'bold 13px sans-serif';
+    const txt = 'mid = ' + step.mid + ' | total ≤mid: ' + step.cnt + ' / target k=' + step.targetK;
+    ctx.fillText(txt, marginX, H - 8);
+  }
+}
+
+function generateKArrays() {
+  const k = parseInt(document.getElementById('kCount').value, 10) || 3;
+  kArrays = [];
+  for (let i = 0; i < k; i++) {
+    const len = Math.floor(Math.random() * 10) + 3;
+    const arr = Array.from({length: len}, () => Math.floor(Math.random() * 80) + 10).sort((a, b) => a - b);
+    kArrays.push(arr);
+  }
+  updateKInputs();
+  resetKDemo();
+  drawKArrays();
+}
+
+function updateKInputs() {
+  const box = document.getElementById('kInputs');
+  if (!box) return;
+  box.innerHTML = '';
+  kArrays.forEach((arr, i) => {
+    const row = document.createElement('div');
+    row.className = 'input-row';
+    row.innerHTML = '<label>arr' + (i+1) + '</label><input type="text" id="kin' + i + '" value="' + arr.join(', ') + '">';
+    box.appendChild(row);
+  });
+}
+
+function runKDemo() {
+  const k = parseInt(document.getElementById('kCount').value, 10) || 3;
+  kArrays = [];
+  for (let i = 0; i < k; i++) {
+    const inp = document.getElementById('kin' + i);
+    if (inp) {
+      kArrays.push(inp.value.split(/[,，\s]+/).map(s => parseInt(s, 10)).filter(n => !isNaN(n)).sort((a,b)=>a-b));
+    }
+  }
+  kArrays = kArrays.filter(a => a.length > 0);
+  if (kArrays.length === 0) { generateKArrays(); return; }
+
+  const res = kMedianBinarySearchSteps(kArrays);
+  kSteps = res.steps;
+  kStepIdx = -1;
+  drawKArrays();
+  updateKInfo();
+  if (kPlaying) stopKPlay();
+}
+
+function stepKNext() {
+  if (kSteps.length === 0) runKDemo();
+  if (kStepIdx < kSteps.length - 1) {
+    kStepIdx++;
+    drawKArrays();
+    updateKInfo();
+    if (kSteps[kStepIdx].done && kPlaying) stopKPlay();
+  }
+}
+
+function toggleKPlay() {
+  if (kPlaying) { stopKPlay(); return; }
+  if (kSteps.length === 0) runKDemo();
+  kPlaying = true;
+  document.getElementById('btnKPlay').textContent = '暂停 ⏸';
+  kPlayLoop();
+}
+
+function stopKPlay() {
+  kPlaying = false;
+  const btn = document.getElementById('btnKPlay');
+  if (btn) btn.textContent = '自动播放 ▶';
+  if (kPlayTimer) clearTimeout(kPlayTimer);
+}
+
+function kPlayLoop() {
+  if (!kPlaying) return;
+  if (kStepIdx >= kSteps.length - 1) { stopKPlay(); return; }
+  stepKNext();
+  const spd = 1100 - parseInt(document.getElementById('speedRange').value, 10) * 100;
+  kPlayTimer = setTimeout(kPlayLoop, spd);
+}
+
+function resetKDemo() {
+  stopKPlay();
+  kStepIdx = -1;
+  kSteps = [];
+  drawKArrays();
+  updateKInfo();
+}
+
+function updateKInfo() {
+  const s = kStepIdx >= 0 ? kSteps[kStepIdx] : null;
+  const el = document.getElementById('kInfoBar');
+  if (!el) return;
+  if (!s) {
+    el.innerHTML = '<span>lo = -</span><span>hi = -</span><span>mid = -</span><span>cnt = -</span>';
+    return;
+  }
+  const status = s.done ? '<span class="ok">✓ 收敛</span>' : (s.cnt < s.targetK ? '<span class="cond-fail">cnt < k → 向右</span>' : '<span class="cond-ok">cnt ≥ k → 向左</span>');
+  el.innerHTML = '<span>lo = ' + s.lo + '</span><span>hi = ' + s.hi + '</span><span>mid = <span class="highlight">' + s.mid + '</span></span><span>cnt = ' + s.cnt + '</span>' + status;
+}
+
+/* ========== Init ========== */
+resize();
+setDefault();
+runDemo();
+generateKArrays();
+</script>
+</body>
+</html>

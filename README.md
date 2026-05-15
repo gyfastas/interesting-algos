@@ -24,6 +24,9 @@
 | 016 | [多元线性回归](./algorithms/linear-regression/) | 梯度下降、Forward & Backward | ⭐ |
 | 017 | [VLM DataLoader](./algorithms/vlm-dataloader/) | 多进程、生产者-消费者队列 | ⭐⭐ |
 | 018 | [VLM 训练流水线](./algorithms/vlm-training-pipeline/) | ViT 全量+LLM Micro-Batch+Recompute | ⭐⭐⭐ |
+| 019 | [寻找两个有序数组的中位数](./algorithms/median-of-two-sorted-arrays/) | 二分查找、数组 | ⭐⭐⭐⭐⭐ |
+| 020 | [洛伦兹吸引子](./algorithms/lorenz-attractor/) | 动力系统、混沌理论、数值模拟 | ⭐⭐⭐ |
+| 021 | [优惠券收集问题](./algorithms/coupon-collector/) | 概率论、期望、调和数 | ⭐⭐⭐ |
 
 ## 目录结构
 
