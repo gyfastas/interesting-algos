@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>矩阵中的最长递增路径 — 记忆化搜索可视化</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #1a1a2e;
+    color: #eaeaea;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 6px; color: #e94560; }
+  .subtitle { color: #a0a0b0; font-size: 0.85rem; margin-bottom: 16px; }
+
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    width: 100%;
+    max-width: 900px;
+    margin-bottom: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+
+  .matrix-wrap {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    flex-direction: column;
+    align-items: center;
+    margin: 14px 0;
+  }
+  .matrix-row {
+    display: flex;
+    gap: 4px;
+  }
+  .cell {
+    width: 50px; height: 50px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    border: 2px solid transparent;
+    position: relative;
+  }
+  .cell:hover { transform: scale(1.08); }
+  .cell.computed {
+    border-color: #4ade80;
+    box-shadow: 0 0 10px rgba(74,222,128,0.3);
+  }
+  .cell.current {
+    border-color: #ffd700;
+    animation: pulse 0.6s ease infinite alternate;
+  }
+  @keyframes pulse {
+    from { transform: scale(1); }
+    to { transform: scale(1.1); }
+  }
+  .cell .dp-val {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+    font-size: 0.6rem;
+    color: #4ade80;
+    font-weight: normal;
+  }
+
+  .ctrl-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 10px;
+  }
+  button {
+    background: #0f3460;
+    color: #eaeaea;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover { background: #1a4a80; }
+  button.primary { background: #e94560; }
+  button.primary:hover { background: #ff6077; }
+
+  .slider-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #b0b0c0;
+    font-size: 0.8rem;
+  }
+  .slider-group label { min-width: 50px; }
+  .slider-group span.val { color: #e94560; font-weight: bold; min-width: 36px; text-align: right; }
+  input[type="range"] { accent-color: #e94560; width: 110px; }
+
+  .stats-bar {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #c0c0d0;
+  }
+  .stats-bar span.highlight { color: #e94560; font-weight: bold; }
+  .stats-bar span.ok { color: #4ade80; }
+
+  .section-title {
+    color: #e94560;
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+  }
+
+  .log {
+    background: #0f1628;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 10px;
+    max-height: 140px;
+    overflow-y: auto;
+    font-family: "Consolas", monospace;
+    font-size: 0.78rem;
+    color: #a0a0b0;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<h1>矩阵中的最长递增路径</h1>
+<div class="subtitle">LeetCode 329 · 记忆化搜索 · lru_cache vs 手写 memo</div>
+
+<div class="panel">
+  <div class="section-title">矩阵（点击单元格查看从该点出发的递增路径）</div>
+  <div class="matrix-wrap" id="matrixPanel"></div>
+  <div class="ctrl-row">
+    <button class="primary" onclick="computeAll()">计算全部 dp</button>
+    <button onclick="randomMatrix()">随机矩阵</button>
+    <div class="slider-group">
+      <label>行</label>
+      <input type="range" id="rowRange" min="3" max="8" value="5">
+      <span class="val" id="rowVal">5</span>
+    </div>
+    <div class="slider-group">
+      <label>列</label>
+      <input type="range" id="colRange" min="3" max="8" value="5">
+      <span class="val" id="colVal">5</span>
+    </div>
+  </div>
+  <div class="stats-bar">
+    <span>最长路径: <span class="ok" id="ansDisplay">-</span></span>
+    <span>已计算: <span class="highlight" id="computedCount">0</span></span>
+    <span>点击单元格: 查看从该点出发的路径</span>
+  </div>
+  <div class="log" id="logBox"></div>
+</div>
+
+<div class="panel">
+  <div class="section-title">核心思路</div>
+  <div style="font-size:0.85rem;color:#b0b0c0;line-height:1.7;">
+    <div><strong style="color:#e94560;">状态:</strong> dp[i][j] = 从 (i,j) 出发的最长递增路径长度</div>
+    <div><strong style="color:#e94560;">转移:</strong> dp[i][j] = 1 + max(dp[ni][nj])，其中 matrix[ni][nj] > matrix[i][j]</div>
+    <div><strong style="color:#e94560;">lru_cache:</strong> @functools.lru_cache(maxsize=None) 自动缓存函数返回值</div>
+    <div><strong style="color:#e94560;">手写 memo:</strong> 二维数组 dp[i][j]，计算前检查是否为 0</div>
+    <div><strong style="color:#4ade80;">关键:</strong> 只能向严格更大的值移动 → 天然无环 → 每个单元格只计算一次</div>
+  </div>
+</div>
+
+<script>
+// ==================== Matrix & DFS ====================
+let matrix = [];
+let dp = [];
+let rows = 5, cols = 5;
+let computed = new Set();
+
+function randMatrix(r, c) {
+  rows = r; cols = c;
+  matrix = [];
+  for (let i = 0; i < r; i++) {
+    const row = [];
+    for (let j = 0; j < c; j++) {
+      row.push(Math.floor(Math.random() * 20) + 1);
+    }
+    matrix.push(row);
+  }
+  dp = Array.from({length: r}, () => Array(c).fill(0));
+  computed = new Set();
+  renderMatrix();
+  document.getElementById('ansDisplay').textContent = '-';
+  document.getElementById('computedCount').textContent = '0';
+  document.getElementById('logBox').innerHTML = '';
+}
+
+function renderMatrix() {
+  const panel = document.getElementById('matrixPanel');
+  panel.innerHTML = '';
+
+  const minV = Math.min(...matrix.flat());
+  const maxV = Math.max(...matrix.flat());
+
+  for (let i = 0; i < rows; i++) {
+    const rowDiv = document.createElement('div');
+    rowDiv.className = 'matrix-row';
+    for (let j = 0; j < cols; j++) {
+      const v = matrix[i][j];
+      const ratio = (v - minV) / (maxV - minV + 1);
+      const hue = 200 + ratio * 60; // blue to purple
+      const light = 30 + ratio * 40;
+
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      if (computed.has(`${i},${j}`)) cell.classList.add('computed');
+      cell.style.background = `hsl(${hue}, 60%, ${light}%)`;
+      cell.style.color = light > 50 ? '#1a1a2e' : '#eaeaea';
+      cell.textContent = v;
+
+      if (dp[i][j] > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'dp-val';
+        badge.textContent = 'dp=' + dp[i][j];
+        cell.appendChild(badge);
+      }
+
+      cell.onclick = () => showPathFrom(i, j);
+      rowDiv.appendChild(cell);
+    }
+    panel.appendChild(rowDiv);
+  }
+}
+
+function dfs(i, j, path) {
+  if (dp[i][j] !== 0) {
+    // Reconstruct path from memo
+    return dp[i][j];
+  }
+
+  let best = 1;
+  const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+  for (let [di, dj] of dirs) {
+    const ni = i + di, nj = j + dj;
+    if (ni >= 0 && ni < rows && nj >= 0 && nj < cols && matrix[ni][nj] > matrix[i][j]) {
+      best = Math.max(best, 1 + dfs(ni, nj, path));
+    }
+  }
+
+  dp[i][j] = best;
+  computed.add(`${i},${j}`);
+  return best;
+}
+
+function computeAll() {
+  dp = Array.from({length: rows}, () => Array(cols).fill(0));
+  computed = new Set();
+
+  let ans = 0;
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < cols; j++) {
+      ans = Math.max(ans, dfs(i, j));
+    }
+  }
+
+  document.getElementById('ansDisplay').textContent = ans;
+  document.getElementById('computedCount').textContent = computed.size;
+  renderMatrix();
+
+  const log = document.getElementById('logBox');
+  log.innerHTML = '';
+  const div = document.createElement('div');
+  div.innerHTML = `<span style="color:#4ade80">✓</span> 计算完成，最长递增路径 = ${ans}`;
+  log.appendChild(div);
+}
+
+function showPathFrom(si, sj) {
+  if (dp[si][sj] === 0) {
+    // compute if not done
+    dfs(si, sj);
+    renderMatrix();
+    document.getElementById('computedCount').textContent = computed.size;
+  }
+
+  // reconstruct one path
+  const path = [[si, sj]];
+  let i = si, j = sj;
+  const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+
+  while (true) {
+    let found = false;
+    for (let [di, dj] of dirs) {
+      const ni = i + di, nj = j + dj;
+      if (ni >= 0 && ni < rows && nj >= 0 && nj < cols && matrix[ni][nj] > matrix[i][j]) {
+        if (dp[ni][nj] === dp[i][j] - 1) {
+          path.push([ni, nj]);
+          i = ni; j = nj;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) break;
+  }
+
+  // highlight path
+  const cells = document.querySelectorAll('.cell');
+  cells.forEach(c => c.style.borderColor = 'transparent');
+
+  for (let [pi, pj] of path) {
+    const idx = pi * cols + pj;
+    if (cells[idx]) {
+      cells[idx].style.borderColor = '#ffd700';
+      cells[idx].style.boxShadow = '0 0 12px rgba(255,215,0,0.4)';
+    }
+  }
+
+  const log = document.getElementById('logBox');
+  const div = document.createElement('div');
+  const pathStr = path.map(p => `(${p[0]},${p[1]})=${matrix[p[0]][p[1]]}`).join(' → ');
+  div.innerHTML = `从 (${si},${sj}) 出发: ${pathStr}，长度=${path.length}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function randomMatrix() {
+  const r = parseInt(document.getElementById('rowRange').value, 10);
+  const c = parseInt(document.getElementById('colRange').value, 10);
+  randMatrix(r, c);
+}
+
+// ==================== Events ====================
+document.getElementById('rowRange').addEventListener('input', e => {
+  document.getElementById('rowVal').textContent = e.target.value;
+  randomMatrix();
+});
+document.getElementById('colRange').addEventListener('input', e => {
+  document.getElementById('colVal').textContent = e.target.value;
+  randomMatrix();
+});
+
+// ==================== Init ====================
+randMatrix(5, 5);
+</script>
+</body>
+</html>
