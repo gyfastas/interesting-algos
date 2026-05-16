@@ -32,6 +32,7 @@
 | 024 | [LRU Cache（线程安全进阶版）](./algorithms/lru-cache/) | 数据结构、哈希表、双向链表、并发 | ⭐⭐⭐ |
 | 025 | [矩阵中的最长递增路径](./algorithms/longest-increasing-path-in-matrix/) | 动态规划、记忆化搜索、DFS | ⭐⭐⭐⭐ |
 | 026 | [MoE Transformer Layer Forward & Backward](./algorithms/moe-transformer/) | 混合专家、手写反向传播、负载均衡 | ⭐⭐⭐⭐⭐ |
+| 027 | [生日问题](./algorithms/birthday-problem/) | 概率论、组合数学、反直觉 | ⭐⭐ |
 
 ## 目录结构
 
