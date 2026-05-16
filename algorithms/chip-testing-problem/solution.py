@@ -3,8 +3,12 @@
 =======================================
 
 B 个芯片中恰有 1 个是坏的。
-有 T 次测试机会，N 个检查器。
-规则: 检查器插入的芯片组中包含坏芯片时，该检查器坏掉(不可再用)。
+有 T 轮测试机会，N 个检查器。
+规则: 每轮可将任意芯片放入任意检查器；若某检查器本轮测的芯片中包含坏芯片，
+      该检查器在本轮结束后坏掉(不可再用)。
+
+等价于 LeetCode 458 (Poor Pigs):
+  检查器 = 猪, 芯片 = 桶, 坏芯片 = 毒药, T 轮 = minutesToTest/minutesToDie
 
 求: 给定 B, T，至少需要多少个检查器 N 才能一定找出坏芯片?
 """
@@ -14,158 +18,148 @@ import random
 
 
 # =============================================================================
-# 核心解法: 下降阶乘 (Falling Factorial)
+# 核心解法: (T+1)^N >= B
 # =============================================================================
-
-def falling_factorial(N, T):
-    """
-    下降阶乘: P(N, T) = N * (N-1) * ... * (N-T+1)
-    如果 T > N，则只计算到 N 个因子(因为 N 轮后检查器全部耗尽)。
-    """
-    effective_T = min(T, N)
-    prod = 1
-    for i in range(effective_T):
-        prod *= (N - i)
-    return prod
-
 
 def min_checkers(B, T):
     """
-    求最小 N 使得下降阶乘 P(N, T) >= B。
+    最小 N 满足 (T+1)^N >= B。
 
-    信息论下界: T 轮测试, 每轮可用检查器递减,
-    最多能区分 P(N, T) = N*(N-1)*...*(N-T+1) 种情况。
-    因此需要 P(N, T) >= B。
+    信息论解释:
+      每个检查器有 (T+1) 种可能状态:
+        - 第 1 轮后坏
+        - 第 2 轮后坏
+        - ...
+        - 第 T 轮后坏
+        - 始终没坏
+      N 个检查器可编码 (T+1)^N 种不同的状态组合。
+      要区分 B 个芯片, 需要 (T+1)^N >= B。
     """
     if B <= 1:
         return 0
-    lo, hi = 1, max(B, T)
-    ans = hi
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if falling_factorial(mid, T) >= B:
-            ans = mid
-            hi = mid - 1
-        else:
-            lo = mid + 1
-    return ans
+    if T == 0:
+        return B  # 0 轮测试无法获取任何信息
+    return math.ceil(math.log(B) / math.log(T + 1))
 
 
 # =============================================================================
-# 构造性策略: 路径编码 (Path Encoding)
+# 构造性策略: (T+1) 进制编码
 # =============================================================================
 
 def encode_strategy(B, N, T):
     """
-    构造检测策略: 给每个芯片分配一条唯一"路径"。
+    构造检测策略。
 
-    路径定义: 长度为 T 的元组 (c1, c2, ..., cT)，
-    其中 ct 表示第 t 轮该芯片被放入第 ct 个检查器。
-    第 t 轮有 (N-t+1) 个可用检查器，因此 ct ∈ [0, N-t]。
+    方法: 把芯片编号用 (T+1) 进制表示, 需要 N 位。
+          检查器 i 在第 t 轮(1-indexed)测所有第 i 位等于 t 的芯片。
+          第 i 位为 0 的芯片, 检查器 i 从不测它。
 
-    总路径数 = N * (N-1) * ... * (N-T+1) = P(N, T)。
-    若 P(N, T) >= B，则可为每个芯片分配唯一路径。
-
-    编码方法: 把 chip_id 视为混合进制数，
-    第 t 位的基数为 (N-t+1)。
+    测试后: 若检查器 i 始终没坏 → 第 i 位 = 0
+            若检查器 i 第 t 轮后坏 → 第 i 位 = t
+            组合 N 个检查器的结果, 解码出芯片编号。
     """
-    paths = []
+    base = T + 1
+    strategy = []
     for chip_id in range(B):
-        path = []
-        remaining = chip_id
-        for t in range(T):
-            base = N - t  # 第 t 轮可用的检查器数
-            path.append(remaining % base)
-            remaining //= base
-        paths.append(tuple(path))
-    return paths
+        # 芯片编号的 (T+1) 进制表示, 补零到 N 位
+        digits = []
+        x = chip_id
+        for _ in range(N):
+            digits.append(x % base)
+            x //= base
+        strategy.append(digits)  # digits[i] = 检查器 i 对应的位数
+    return strategy
 
 
 def simulate_detection(B, T, N, bad_chip, verbose=False):
     """
-    用路径编码策略模拟检测过程，验证能否找到坏芯片。
+    模拟 (T+1) 进制编码策略检测过程。
 
     返回: (是否成功, 实际使用轮数)
     """
-    paths = encode_strategy(B, N, T)
-    candidates = list(range(B))
-    available = list(range(N))  # 可用检查器编号
+    strategy = encode_strategy(B, N, T)
+    base = T + 1
 
     if verbose:
-        print(f"  坏芯片 = {bad_chip}, 路径 = {paths[bad_chip]}")
+        print(f"  坏芯片 = {bad_chip}, 编码 = {strategy[bad_chip]}")
 
-    for t in range(T):
-        if len(candidates) <= 1:
-            break
-
-        m = len(available)
-        # 按路径第 t 位分组
-        groups = [[] for _ in range(m)]
-        for chip in candidates:
-            checker_idx = paths[chip][t]
-            groups[checker_idx].append(chip)
-
-        # 坏芯片所在的组
-        bad_checker_idx = paths[bad_chip][t]
+    # 逐轮测试
+    for t in range(1, T + 1):
         if verbose:
-            print(f"  第{t+1}轮: {m}个检查器, 分组大小 = {[len(g) for g in groups]}, "
-                  f"坏检查器索引 = {bad_checker_idx}")
+            tested = [[] for _ in range(N)]
+            for chip in range(B):
+                for i in range(N):
+                    if strategy[chip][i] == t:
+                        tested[i].append(chip)
+            print(f"  第{t}轮测试分配: {tested}")
 
-        # 该检查器坏掉
-        available.pop(bad_checker_idx)
-        candidates = groups[bad_checker_idx]
+        # 检查哪些检查器会坏
+        broken = set()
+        for i in range(N):
+            if strategy[bad_chip][i] == t:
+                broken.add(i)
 
-    success = (len(candidates) == 1 and candidates[0] == bad_chip)
-    return success, min(t + 1, T)
+        if verbose:
+            print(f"  本轮坏掉的检查器: {sorted(broken) if broken else '无'}")
+
+    # 解码: 根据每个检查器在第几轮坏, 重构芯片编号
+    decoded = 0
+    for i in range(N):
+        digit = strategy[bad_chip][i]
+        decoded += digit * (base ** i)
+
+    success = (decoded == bad_chip)
+    if verbose:
+        print(f"  解码结果: {decoded}, {'✓ 正确' if success else '✗ 错误'}")
+    return success, T
+
+
+def decode_result(strategy, broken_round, B, N, T):
+    """
+    根据检查结果解码坏芯片编号。
+
+    broken_round[i] = 检查器 i 在第几轮后坏, 若始终没坏则为 0。
+    """
+    base = T + 1
+    chip_id = 0
+    for i in range(N):
+        chip_id += broken_round[i] * (base ** i)
+    return chip_id if chip_id < B else None
 
 
 # =============================================================================
-# 贪心策略对比 (非最优，用于展示)
+# Monte Carlo 模拟验证
 # =============================================================================
 
-def simulate_greedy(B, T, N, bad_chip):
+def monte_carlo_verify(B, T, trials=10000, seed=None):
     """
-    贪心策略: 每轮把候选芯片尽可能均匀分配到当前可用检查器中。
-    注意: 贪心策略不保证最优，可能需要的 N 更大。
+    随机生成坏芯片, 验证 (T+1) 进制策略是否总能正确找出。
     """
-    candidates = list(range(B))
-    available = list(range(N))
+    if seed is not None:
+        random.seed(seed)
 
-    for t in range(T):
-        if len(candidates) <= 1:
-            break
-        m = len(available)
-        if m == 0:
-            return False  # 没有可用检查器但仍未确定
-        # 均匀分组
-        groups = [[] for _ in range(m)]
-        for i, chip in enumerate(candidates):
-            groups[i % m].append(chip)
+    N = min_checkers(B, T)
+    if N == 0:
+        return True
 
-        # 找到坏芯片所在组
-        bad_group = None
-        for i, g in enumerate(groups):
-            if bad_chip in g:
-                bad_group = i
-                break
+    strategy = encode_strategy(B, N, T)
+    base = T + 1
 
-        available.pop(bad_group)
-        candidates = groups[bad_group]
+    for _ in range(trials):
+        bad = random.randint(0, B - 1)
 
-    return len(candidates) == 1 and candidates[0] == bad_chip
+        # 模拟 T 轮
+        broken_round = [0] * N  # 0 表示始终没坏
+        for t in range(1, T + 1):
+            for i in range(N):
+                if broken_round[i] == 0 and strategy[bad][i] == t:
+                    broken_round[i] = t
 
+        decoded = decode_result(strategy, broken_round, B, N, T)
+        if decoded != bad:
+            return False, bad, decoded, broken_round
 
-def min_checkers_greedy(B, T):
-    """用贪心策略模拟找最小 N(通常比理论最优大)。"""
-    for N in range(1, B + 1):
-        ok = True
-        for bad in range(B):
-            if not simulate_greedy(B, T, N, bad):
-                ok = False
-                break
-        if ok:
-            return N
-    return B
+    return True, None, None, None
 
 
 # =============================================================================
@@ -174,80 +168,81 @@ def min_checkers_greedy(B, T):
 
 def demo():
     print("=" * 70)
-    print("🔬 坏芯片检测问题")
+    print("🔬 坏芯片检测问题 (等价于 LeetCode 458 Poor Pigs)")
     print("=" * 70)
     print()
 
-    # 核心结论
     print("【核心结论】")
-    print("  最小检查器数 N 满足: N * (N-1) * ... * (N-T+1) >= B")
-    print("  即下降阶乘 P(N, T) >= B")
+    print("  最小检查器数 N 满足: (T+1)^N >= B")
+    print("  即 N = ceil(log(B) / log(T+1))")
     print()
 
-    # 常用对照表
     print("【常用对照表】")
-    print(f"{'B':>6} | {'T':>3} | {'最小 N':>6} | {'P(N,T)':>8} | {'贪心 N':>6}")
-    print("-" * 45)
+    print(f"{'B':>6} | {'T':>3} | {'最小 N':>6} | {'(T+1)^N':>10}")
+    print("-" * 32)
     test_cases = [
-        (2, 1), (10, 1), (100, 1),
-        (4, 2), (6, 2), (10, 2), (12, 2),
-        (6, 3), (10, 3), (24, 3), (50, 3), (60, 3),
-        (24, 4), (50, 4),
-        (100, 2), (100, 3), (100, 4), (100, 5),
-        (120, 5),
+        (2, 1), (3, 1), (4, 1), (8, 1), (10, 1),
+        (2, 2), (4, 2), (8, 2), (9, 2), (27, 2), (28, 2),
+        (2, 3), (8, 3), (16, 3), (64, 3), (65, 3),
+        (100, 3), (100, 4), (100, 5),
+        (1000, 3), (1000, 5), (1000, 7), (1000, 9), (1000, 15),
     ]
     for B, T in test_cases:
         N = min_checkers(B, T)
-        p = falling_factorial(N, T)
-        N_greedy = min_checkers_greedy(B, T)
-        print(f"{B:>6} | {T:>3} | {N:>6} | {p:>8} | {N_greedy:>6}")
-    print()
-
-    # 构造性策略验证
-    print("【构造性策略验证】(路径编码)")
-    verify_cases = [
-        (6, 2), (10, 3), (50, 3), (24, 4), (100, 4),
-    ]
-    for B, T in verify_cases:
-        N = min_checkers(B, T)
-        ok = True
-        for bad in range(B):
-            success, rounds = simulate_detection(B, T, N, bad)
-            if not success:
-                ok = False
-                break
-        status = "✓ 全部通过" if ok else "✗ 存在失败"
-        print(f"  B={B:3d}, T={T}, N={N}: {status}")
+        print(f"{B:>6} | {T:>3} | {N:>6} | {(T+1)**N:>10}")
     print()
 
     # 详细模拟一个例子
-    print("【详细模拟】B=10, T=3, N=4")
-    print("-" * 45)
-    B, T, N = 10, 3, 4
-    paths = encode_strategy(B, N, T)
-    print("  路径编码 (chip_id → path):")
-    for i in range(B):
-        print(f"    芯片{i}: {paths[i]}")
+    print("【详细模拟】B=9, T=2, N=2")
+    print("-" * 50)
+    B_ex, T_ex, N_ex = 9, 2, 2
+    strategy = encode_strategy(B_ex, N_ex, T_ex)
+    print("  (T+1)=3 进制编码:")
+    for i in range(B_ex):
+        print(f"    芯片{i}: {strategy[i]} (3进制) = {i}")
     print()
 
-    for bad_chip in [0, 7, 9]:
+    for bad_chip in [0, 4, 8]:
         print(f"  >>> 假设芯片 {bad_chip} 是坏芯片:")
-        simulate_detection(B, T, N, bad_chip, verbose=True)
+        simulate_detection(B_ex, T_ex, N_ex, bad_chip, verbose=True)
         print()
+
+    # Monte Carlo 验证
+    print("【Monte Carlo 验证】")
+    verify_cases = [
+        (8, 2), (27, 2), (64, 3), (100, 3), (1000, 5),
+    ]
+    for B, T in verify_cases:
+        N = min_checkers(B, T)
+        ok, bad, decoded, br = monte_carlo_verify(B, T, trials=5000, seed=42)
+        status = "✓ 全部通过" if ok else f"✗ 失败 (bad={bad}, decoded={decoded})"
+        print(f"  B={B:4d}, T={T}, N={N}: {status}")
+    print()
 
     # 信息论解释
     print("【信息论解释】")
-    print("  每轮测试后，恰有 1 个检查器坏掉(坏芯片所在的那个)。")
-    print("  因此第 t 轮有 (N-t+1) 种可能结果(哪个检查器坏)。")
-    print("  T 轮总信息量 = N × (N-1) × ... × (N-T+1) 种路径。")
-    print("  要区分 B 个芯片，需要路径数 ≥ B，即 P(N,T) ≥ B。")
+    print("  每个检查器有 (T+1) 种独立状态:")
+    print("    0 = 始终没坏")
+    print("    1 = 第 1 轮后坏")
+    print("    2 = 第 2 轮后坏")
+    print("    ...")
+    print("    T = 第 T 轮后坏")
+    print("  N 个检查器可编码 (T+1)^N 种独立状态组合。")
+    print("  要区分 B 个芯片, 需要状态空间 >= B。")
     print()
 
-    # 边界情况
+    print("【与 LeetCode 458 的对应】")
+    print("  检查器  ↔  猪")
+    print("  芯片    ↔  水桶")
+    print("  坏芯片  ↔  毒药水")
+    print("  T 轮    ↔  minutesToTest / minutesToDie")
+    print("  检查器坏掉 ↔ 猪死亡")
+    print()
+
     print("【边界情况】")
-    print(f"  T=1 (只能测1轮): 需要 N ≥ B，每个检查器测1个芯片")
-    print(f"  T≥N (轮数充足):  需要 N! ≥ B，N 个检查器各用1次")
-    print(f"  B=2, T任意:      只需要 N=2，第1轮即可区分")
+    print("  T=0: 无法进行任何测试, 需要 N=B (每个检查器保一个芯片)")
+    print("  T=1: 需要 N=ceil(log2(B)), 每个检查器测一组, 结果是好/坏 1bit")
+    print("  B=2: 任意 T>=1, 都只需要 N=1")
 
 
 if __name__ == "__main__":

@@ -19,8 +19,8 @@
     background:#16213e; border-radius:12px; padding:14px;
     border:1px solid #0f3460;
   }
-  .left { flex:1 1 340px; }
-  .right { flex:2 1 520px; }
+  .left { flex:1 1 360px; }
+  .right { flex:2 1 500px; }
 
   .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
   .control-group { display:flex; flex-direction:column; gap:2px; }
@@ -46,7 +46,16 @@
   .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
 
   .info-text { font-size:0.8rem; color:#aab; margin-top:8px; line-height:1.5; }
-  .info-text code { background:#0d1b2a; padding:1px 5px; border-radius:3px; color:#4cc9f0; font-family:monospace; }
+
+  .encoding-table {
+    width:100%; border-collapse:collapse; font-size:0.75rem; margin-top:8px;
+  }
+  .encoding-table th, .encoding-table td {
+    padding:4px 6px; text-align:center; border:1px solid #1a3a5c;
+  }
+  .encoding-table th { background:#0f3460; color:#fff; }
+  .encoding-table td { background:#0d1b2a; }
+  .encoding-table .highlight-row { background:#1a3a5c !important; color:#e94560; font-weight:bold; }
 
   h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
 </style>
@@ -54,49 +63,50 @@
 <body>
 <div class="container">
   <h1>🔬 坏芯片检测问题</h1>
-  <div class="subtitle">B 个芯片，T 次测试，至少需要多少个检查器 N？</div>
+  <div class="subtitle">等价于 LeetCode 458 Poor Pigs — (T+1)^N >= B</div>
 
   <div class="layout">
     <div class="panel left">
       <div class="controls">
         <div class="control-group">
           <label>芯片数 B</label>
-          <input id="bSlider" type="range" min="2" max="24" value="10">
-          <span id="bVal" style="font-size:0.7rem;color:#e94560;">10</span>
+          <input id="bSlider" type="range" min="2" max="27" value="9">
+          <span id="bVal" style="font-size:0.7rem;color:#e94560;">9</span>
         </div>
         <div class="control-group">
-          <label>测试次数 T</label>
-          <input id="tSlider" type="range" min="1" max="5" value="3">
-          <span id="tVal" style="font-size:0.7rem;color:#e94560;">3</span>
-        </div>
-        <div class="control-group">
-          <label>检查器 N</label>
-          <input id="nSlider" type="range" min="1" max="10" value="4">
-          <span id="nVal" style="font-size:0.7rem;color:#e94560;">4</span>
+          <label>测试轮数 T</label>
+          <input id="tSlider" type="range" min="1" max="4" value="2">
+          <span id="tVal" style="font-size:0.7rem;color:#e94560;">2</span>
         </div>
         <button id="btnReset">⟲ 重置</button>
       </div>
       <div class="stats">
-        <div class="stat-box">P(N,T): <b id="statFalling">--</b></div>
         <div class="stat-box">理论最小 N: <b id="statMinN" style="color:#e94560;">--</b></div>
+        <div class="stat-box">(T+1)^N: <b id="statCapacity">--</b></div>
       </div>
       <div class="controls" style="margin-top:10px;">
         <button id="btnStep">▶ 下一步</button>
         <button id="btnAuto" class="secondary">⏵ 自动</button>
-        <button id="btnRandBad" class="secondary">🎲 随机坏芯片</button>
+        <button id="btnRandBad" class="secondary">🎲 换坏芯片</button>
       </div>
       <div class="info-text" id="infoText">
-        调节 B, T, N 后点击"下一步"开始模拟。
+        调节 B, T 后点击"下一步"开始模拟。
+      </div>
+      <div style="max-height:200px; overflow-y:auto; margin-top:8px;">
+        <table class="encoding-table" id="encodeTable">
+          <thead><tr><th>芯片</th><th>d₀</th><th>d₁</th><th>d₂</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
 
     <div class="panel right">
-      <canvas id="simCanvas" width="540" height="320"></canvas>
+      <canvas id="simCanvas" width="520" height="340"></canvas>
       <div class="legend">
-        <span><i class="dot" style="background:#4cc9f0;"></i>候选芯片</span>
-        <span><i class="dot" style="background:#e94560;"></i>坏芯片</span>
-        <span><i class="dot" style="background:#90be6d;"></i>完好检查器</span>
-        <span><i class="dot" style="background:#f9c74f;"></i>坏掉的检查器</span>
+        <span><i class="dot" style="background:#4cc9f0;"></i>完好检查器</span>
+        <span><i class="dot" style="background:#f9c74f;"></i>本轮坏掉</span>
+        <span><i class="dot" style="background:#e94560;"></i>之前已坏</span>
+        <span><i class="dot" style="background:#90be6d;"></i>芯片被测</span>
       </div>
     </div>
   </div>
@@ -112,49 +122,36 @@
 // 数学函数
 // =============================================================================
 
-function fallingFactorial(N, T) {
-  const effT = Math.min(T, N);
-  let p = 1;
-  for(let i=0; i<effT; i++) p *= (N - i);
-  return p;
-}
-
 function minCheckers(B, T) {
   if(B <= 1) return 0;
-  let lo=1, hi=Math.max(B, T), ans=hi;
-  while(lo <= hi) {
-    const mid = (lo+hi)>>1;
-    if(fallingFactorial(mid, T) >= B) { ans=mid; hi=mid-1; }
-    else lo=mid+1;
-  }
-  return ans;
+  if(T === 0) return B;
+  return Math.ceil(Math.log(B) / Math.log(T + 1));
 }
 
-function encodePaths(B, N, T) {
-  const paths = [];
+function encodeStrategy(B, N, T) {
+  const base = T + 1;
+  const strategy = [];
   for(let id=0; id<B; id++) {
-    const path = [];
-    let rem = id;
-    for(let t=0; t<T; t++) {
-      const base = N - t;
-      path.push(rem % base);
-      rem = Math.floor(rem / base);
+    const digits = [];
+    let x = id;
+    for(let i=0; i<N; i++) {
+      digits.push(x % base);
+      x = Math.floor(x / base);
     }
-    paths.push(path);
+    strategy.push(digits);
   }
-  return paths;
+  return strategy;
 }
 
 // =============================================================================
 // 状态
 // =============================================================================
 
-let B = 10, T = 3, N = 4;
-let badChip = 7;
-let paths = [];
-let candidates = [];
-let available = [];
+let B = 9, T = 2, N = 2;
+let badChip = 4;
+let strategy = [];
 let currentRound = 0;
+let checkerStates = []; // 0=完好, t=第t轮后坏
 let autoTimer = null;
 
 // =============================================================================
@@ -170,195 +167,173 @@ function drawSim() {
 
   // Title
   sctx.fillStyle = '#aab'; sctx.font = 'bold 12px sans-serif'; sctx.textAlign = 'left';
-  sctx.fillText(`第 ${currentRound} / ${T} 轮  |  候选集: ${candidates.length} 个芯片  |  可用检查器: ${available.length} 个`, 10, 18);
+  const roundText = currentRound === 0 ? '准备阶段' : `第 ${currentRound} / ${T} 轮`;
+  sctx.fillText(`${roundText}  |  坏芯片 = ${badChip}  |  编码 = (${strategy[badChip]?.join(',') || ''})`, 10, 18);
 
-  // Draw chips
-  const chipR = 14;
-  const chipsPerRow = Math.min(B, 12);
-  const chipStartY = 40;
-  const chipGapX = 38;
-  const chipGapY = 38;
+  const base = T + 1;
+  const cellW = 36, cellH = 28;
+  const startX = 20, startY = 40;
 
-  for(let i=0; i<B; i++) {
-    const row = Math.floor(i / chipsPerRow);
-    const col = i % chipsPerRow;
-    const cx = 20 + col * chipGapX + chipR;
-    const cy = chipStartY + row * chipGapY + chipR;
-
-    const isCandidate = candidates.includes(i);
-    const isBad = (i === badChip);
-
-    sctx.beginPath();
-    sctx.arc(cx, cy, chipR, 0, Math.PI*2);
-    if(isBad && currentRound > 0) {
-      sctx.fillStyle = '#e94560';
-    } else if(isCandidate) {
-      sctx.fillStyle = '#4cc9f0';
-    } else {
-      sctx.fillStyle = '#1a3a5c';
-    }
-    sctx.fill();
-    sctx.strokeStyle = isCandidate || (isBad && currentRound>0) ? '#fff' : '#0f3460';
-    sctx.lineWidth = 1.5;
-    sctx.stroke();
-
-    sctx.fillStyle = '#fff'; sctx.font = '10px sans-serif'; sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
-    sctx.fillText(i, cx, cy);
-
-    // path label
-    if(paths[i] && currentRound === 0) {
-      sctx.fillStyle = '#889'; sctx.font = '9px monospace';
-      sctx.fillText('(' + paths[i].join(',') + ')', cx, cy + chipR + 10);
-    }
+  // Grid header: chip ids
+  sctx.fillStyle = '#889'; sctx.font = '10px sans-serif'; sctx.textAlign = 'center';
+  for(let chip=0; chip<B; chip++) {
+    const cx = startX + 50 + chip * cellW + cellW/2;
+    sctx.fillText(chip, cx, startY - 6);
   }
 
-  // Draw checkers
-  const checkerW = 50, checkerH = 70;
-  const checkerStartX = 20;
-  const checkerY = h - checkerH - 15;
+  // Grid rows: rounds
+  for(let t=1; t<=T; t++) {
+    const cy = startY + (t-1) * cellH;
+    sctx.fillStyle = '#889'; sctx.font = '10px sans-serif'; sctx.textAlign = 'right';
+    sctx.fillText('第' + t + '轮', startX + 40, cy + cellH/2 + 4);
 
-  for(let i=0; i<N; i++) {
-    const cx = checkerStartX + i * (checkerW + 10);
-    const isAvailable = available.includes(i);
-    const isBrokenThisRound = (currentRound > 0 && !isAvailable && currentRound <= T &&
-      (() => {
-        // Determine if this checker broke in the current-1 round
-        const prevAvail = [];
-        for(let j=0; j<N; j++) prevAvail.push(j);
-        let prevCandidates = Array.from({length:B},(_,k)=>k);
-        for(let r=0; r<currentRound-1; r++) {
-          const groups = groupByPath(prevCandidates, r, prevAvail);
-          const badIdx = paths[badChip][r];
-          const actualIdx = prevAvail.indexOf(badIdx);
-          prevAvail.splice(actualIdx, 1);
-          prevCandidates = groups[actualIdx];
+    for(let chip=0; chip<B; chip++) {
+      const cx = startX + 50 + chip * cellW;
+      const isTested = strategy[chip] && strategy[chip][0] !== undefined;
+      const digit = isTested ? strategy[chip][0] : 0; // show round 1 digit
+
+      // For display, show which checker tests this chip in each round
+      let testedBy = -1;
+      for(let i=0; i<N; i++) {
+        if(strategy[chip] && strategy[chip][i] === t) {
+          testedBy = i;
+          break;
         }
-        const lastGroups = groupByPath(prevCandidates, currentRound-1, prevAvail);
-        const lastBadIdx = paths[badChip][currentRound-1];
-        const actualBadIdx = prevAvail.indexOf(lastBadIdx);
-        return prevAvail[actualBadIdx] === i;
-      })());
+      }
 
-    sctx.fillStyle = isAvailable ? '#90be6d' : (isBrokenThisRound ? '#f9c74f' : '#1a3a5c');
-    sctx.strokeStyle = isAvailable ? '#90be6d' : (isBrokenThisRound ? '#f9c74f' : '#0f3460');
-    sctx.lineWidth = 2;
-    sctx.beginPath();
-    sctx.roundRect(cx, checkerY, checkerW, checkerH, 6);
-    sctx.fill(); sctx.stroke();
+      const isBadChip = (chip === badChip);
+      const isHighlighted = isBadChip && testedBy >= 0;
 
-    sctx.fillStyle = isAvailable || isBrokenThisRound ? '#1a1a2e' : '#667';
-    sctx.font = 'bold 11px sans-serif'; sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
-    sctx.fillText('C' + i, cx + checkerW/2, checkerY + checkerH/2);
+      sctx.fillStyle = isHighlighted ? '#e94560' : (testedBy >= 0 ? '#1a3a5c' : '#0d1b2a');
+      if(testedBy >= 0 && !isHighlighted) sctx.fillStyle = '#1a3a5c';
+      sctx.fillRect(cx + 1, cy + 1, cellW - 2, cellH - 2);
+      sctx.strokeStyle = '#0f3460'; sctx.lineWidth = 1;
+      sctx.strokeRect(cx, cy, cellW, cellH);
 
-    // label
-    sctx.fillStyle = '#889'; sctx.font = '9px sans-serif';
-    sctx.fillText(isAvailable ? '可用' : (isBrokenThisRound ? '已坏' : '已坏'), cx + checkerW/2, checkerY + checkerH + 12);
-  }
-
-  // Draw arrows from chips to checkers for current round
-  if(currentRound > 0 && currentRound <= T && candidates.length > 1) {
-    const m = available.length;
-    const groups = groupByPath(candidates, currentRound-1, available);
-    for(let gi=0; gi<groups.length; gi++) {
-      const checkerIdx = available[gi];
-      const cxChecker = checkerStartX + checkerIdx * (checkerW + 10) + checkerW/2;
-      const cyChecker = checkerY;
-      for(const chip of groups[gi]) {
-        const row = Math.floor(chip / chipsPerRow);
-        const col = chip % chipsPerRow;
-        const cxChip = 20 + col * chipGapX + chipR;
-        const cyChip = chipStartY + row * chipGapY + chipR * 2;
-        sctx.strokeStyle = 'rgba(255,255,255,0.15)'; sctx.lineWidth = 1;
-        sctx.beginPath(); sctx.moveTo(cxChip, cyChip); sctx.lineTo(cxChecker, cyChecker); sctx.stroke();
+      if(testedBy >= 0) {
+        sctx.fillStyle = isHighlighted ? '#fff' : '#90be6d';
+        sctx.font = 'bold 10px sans-serif'; sctx.textAlign = 'center';
+        sctx.fillText('C' + testedBy, cx + cellW/2, cy + cellH/2 + 4);
       }
     }
   }
-}
 
-function groupByPath(cand, roundIdx, avail) {
-  const groups = [];
-  for(let i=0; i<avail.length; i++) groups.push([]);
-  for(const chip of cand) {
-    const idx = paths[chip][roundIdx];
-    const pos = avail.indexOf(idx);
-    if(pos >= 0) groups[pos].push(chip);
+  // Checker status
+  const checkerY = startY + T * cellH + 20;
+  sctx.fillStyle = '#aab'; sctx.font = 'bold 11px sans-serif'; sctx.textAlign = 'left';
+  sctx.fillText('检查器状态:', startX, checkerY);
+
+  for(let i=0; i<N; i++) {
+    const cx = startX + 80 + i * 70;
+    const state = checkerStates[i];
+    let color, label;
+    if(state === 0) {
+      color = '#4cc9f0'; label = '完好';
+    } else if(state === currentRound && currentRound > 0) {
+      color = '#f9c74f'; label = '本轮坏';
+    } else {
+      color = '#e94560'; label = '第' + state + '轮坏';
+    }
+
+    sctx.fillStyle = color;
+    sctx.beginPath(); sctx.arc(cx + 15, checkerY + 10, 12, 0, Math.PI*2); sctx.fill();
+    sctx.fillStyle = '#1a1a2e'; sctx.font = 'bold 10px sans-serif'; sctx.textAlign = 'center';
+    sctx.fillText('C'+i, cx + 15, checkerY + 13);
+
+    sctx.fillStyle = '#889'; sctx.font = '9px sans-serif'; sctx.textAlign = 'center';
+    sctx.fillText(label, cx + 15, checkerY + 32);
   }
-  return groups;
+
+  // Decode result
+  if(currentRound >= T) {
+    let decoded = 0;
+    for(let i=0; i<N; i++) {
+      decoded += checkerStates[i] * Math.pow(base, i);
+    }
+    const resultY = checkerY + 50;
+    sctx.fillStyle = decoded === badChip ? '#90be6d' : '#e94560';
+    sctx.font = 'bold 13px sans-serif'; sctx.textAlign = 'left';
+    sctx.fillText(`解码: d=[${checkerStates.join(',')}] → ${decoded} (base-${base}) = ${decoded === badChip ? '✓ 正确!' : '✗ 错误!'}`, startX, resultY);
+  }
 }
 
 function step() {
-  if(currentRound >= T || candidates.length <= 1) {
+  if(currentRound >= T) {
     stopAuto();
-    updateInfo();
     return;
   }
-
-  const m = available.length;
-  if(m === 0) {
-    stopAuto();
-    updateInfo();
-    return;
-  }
-
-  const groups = groupByPath(candidates, currentRound, available);
-  const badCheckerIdx = paths[badChip][currentRound];
-  const actualBadPos = available.indexOf(badCheckerIdx);
-
-  available.splice(actualBadPos, 1);
-  candidates = groups[actualBadPos];
   currentRound++;
+  const base = T + 1;
+
+  // Determine which checkers break this round
+  for(let i=0; i<N; i++) {
+    if(checkerStates[i] === 0 && strategy[badChip][i] === currentRound) {
+      checkerStates[i] = currentRound;
+    }
+  }
+
   drawSim();
   updateInfo();
 }
 
 function updateInfo() {
   const el = document.getElementById('infoText');
-  if(candidates.length === 1) {
-    const found = candidates[0] === badChip;
-    el.innerHTML = `<span style="color:#90be6d;">✓ 已确定坏芯片为 ${candidates[0]}${found ? '' : ' (错误!)'}</span>`;
-  } else if(currentRound >= T || available.length === 0) {
-    el.innerHTML = `<span style="color:#e94560;">✗ ${currentRound} 轮后仍有 ${candidates.length} 个候选，无法确定！</span>`;
+  if(currentRound === 0) {
+    el.textContent = `坏芯片 = ${badChip}，编码 = (${strategy[badChip]?.join(',') || ''})，点击"下一步"开始。`;
+  } else if(currentRound < T) {
+    el.textContent = `第 ${currentRound} 轮结束。继续点击"下一步"。`;
   } else {
-    el.innerHTML = `第 ${currentRound+1} 轮: 将 ${candidates.length} 个候选芯片分配到 ${available.length} 个检查器中...`;
+    let decoded = 0;
+    const base = T + 1;
+    for(let i=0; i<N; i++) decoded += checkerStates[i] * Math.pow(base, i);
+    const ok = decoded === badChip;
+    el.innerHTML = `<span style="color:${ok ? '#90be6d' : '#e94560'};">${ok ? '✓' : '✗'} 解码结果: ${decoded}，${ok ? '正确!' : '错误!'}</span>`;
   }
 }
 
 function reset() {
   B = parseInt(document.getElementById('bSlider').value);
   T = parseInt(document.getElementById('tSlider').value);
-  N = parseInt(document.getElementById('nSlider').value);
+  N = minCheckers(B, T);
 
-  // Ensure N is sufficient for falling factorial >= B
-  const minN = minCheckers(B, T);
-  if(N < minN) {
-    N = minN;
-    document.getElementById('nSlider').value = N;
-    document.getElementById('nVal').textContent = N;
-  }
-
-  paths = encodePaths(B, N, T);
-  candidates = Array.from({length:B}, (_,i)=>i);
-  available = Array.from({length:N}, (_,i)=>i);
+  strategy = encodeStrategy(B, N, T);
   currentRound = 0;
+  checkerStates = new Array(N).fill(0);
 
-  document.getElementById('statFalling').textContent = fallingFactorial(N, T);
-  document.getElementById('statMinN').textContent = minN;
-  document.getElementById('infoText').textContent = `坏芯片 = ${badChip}，点击"下一步"开始模拟。`;
-
+  document.getElementById('statMinN').textContent = N;
+  document.getElementById('statCapacity').textContent = Math.pow(T+1, N);
+  updateInfo();
   drawSim();
   drawTable();
+  updateEncodeTable();
+}
+
+function updateEncodeTable() {
+  const tbody = document.querySelector('#encodeTable tbody');
+  const thead = document.querySelector('#encodeTable thead tr');
+  tbody.innerHTML = '';
+  thead.innerHTML = '<th>芯片</th>';
+  for(let i=0; i<N; i++) thead.innerHTML += `<th>d<sub>${i}</sub></th>`;
+
+  for(let chip=0; chip<B; chip++) {
+    const tr = document.createElement('tr');
+    if(chip === badChip) tr.className = 'highlight-row';
+    let html = `<td>${chip}</td>`;
+    for(let i=0; i<N; i++) {
+      html += `<td>${strategy[chip][i]}</td>`;
+    }
+    tr.innerHTML = html;
+    tbody.appendChild(tr);
+  }
 }
 
 function startAuto() {
   if(autoTimer) return;
   document.getElementById('btnAuto').textContent = '⏸ 暂停';
   autoTimer = setInterval(()=>{
-    if(currentRound >= T || candidates.length <= 1 || available.length === 0) {
-      stopAuto();
-    } else {
-      step();
-    }
-  }, 600);
+    if(currentRound >= T) stopAuto();
+    else step();
+  }, 800);
 }
 
 function stopAuto() {
@@ -377,10 +352,10 @@ function drawTable() {
   const w = tableCanvas.width, h = tableCanvas.height;
   tctx.clearRect(0, 0, w, h);
 
-  const Bvals = [2, 4, 6, 10, 12, 24, 50, 100];
-  const Tvals = [1, 2, 3, 4, 5];
-  const cellW = 80, cellH = 28;
-  const startX = 60, startY = 35;
+  const Bvals = [4, 8, 16, 27, 64, 100, 1000];
+  const Tvals = [1, 2, 3, 4, 5, 9, 15];
+  const cellW = 100, cellH = 28;
+  const startX = 70, startY = 35;
 
   // Header row
   tctx.fillStyle = '#e94560'; tctx.font = 'bold 11px sans-serif'; tctx.textAlign = 'center';
@@ -424,15 +399,8 @@ document.getElementById('tSlider').oninput = function() {
   document.getElementById('tVal').textContent = T;
   reset();
 };
-document.getElementById('nSlider').oninput = function() {
-  N = parseInt(this.value);
-  document.getElementById('nVal').textContent = N;
-  reset();
-};
 document.getElementById('btnReset').onclick = reset;
-document.getElementById('btnStep').onclick = function() {
-  stopAuto(); step();
-};
+document.getElementById('btnStep').onclick = function() { stopAuto(); step(); };
 document.getElementById('btnAuto').onclick = function() {
   if(autoTimer) stopAuto(); else startAuto();
 };
