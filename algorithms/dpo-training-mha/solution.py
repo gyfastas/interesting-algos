@@ -1,0 +1,582 @@
+"""
+DPO (Direct Preference Optimization) 训练 One-Layer MHA Transformer
+======================================================================
+
+核心考点：在 MHA Forward & Backward 基础上，手写 DPO Loss 的梯度推导，
+          并实现完整的偏好优化训练。
+
+模型：Embedding → MHA(causal) → Residual → FFN → Residual → Projection
+Loss：DPO = -log σ(β·(log π(y_w|x) - log π(y_l|x) - log π_ref(y_w|x) + log π_ref(y_l|x)))
+
+纯 NumPy 实现，含完整反向传播 + 数值梯度验证。
+"""
+
+import numpy as np
+from copy import deepcopy
+
+
+# =============================================================================
+# 基础工具函数
+# =============================================================================
+
+def softmax(x, axis=-1):
+    x_max = np.max(x, axis=axis, keepdims=True)
+    exp_x = np.exp(x - x_max)
+    return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+
+
+def softmax_backward(dy, y):
+    inner = np.sum(dy * y, axis=-1, keepdims=True)
+    return y * (dy - inner)
+
+
+def gradient_clip(grad, max_norm=1.0):
+    norm = np.linalg.norm(grad)
+    if norm > max_norm:
+        return grad * (max_norm / norm)
+    return grad
+
+
+# =============================================================================
+# 基础层
+# =============================================================================
+
+class LinearLayer:
+    def __init__(self, d_in, d_out):
+        lim = np.sqrt(6.0 / (d_in + d_out))
+        self.W = np.random.uniform(-lim, lim, (d_in, d_out))
+        self.b = np.zeros((1, d_out))
+        self.grad_W = np.zeros_like(self.W)
+        self.grad_b = np.zeros_like(self.b)
+
+    def forward(self, x):
+        self.x = x
+        return x @ self.W + self.b
+
+    def backward(self, dy):
+        x_2d = self.x.reshape(-1, self.x.shape[-1])
+        dy_2d = dy.reshape(-1, dy.shape[-1])
+        self.grad_W = x_2d.T @ dy_2d
+        self.grad_b = np.sum(dy_2d, axis=0, keepdims=True)
+        dx = dy_2d @ self.W.T
+        return dx.reshape(self.x.shape)
+
+    def update(self, lr):
+        self.W -= lr * self.grad_W
+        self.b -= lr * self.grad_b
+
+
+class ReLULayer:
+    def forward(self, x):
+        self.mask = (x > 0)
+        return x * self.mask
+
+    def backward(self, dy):
+        return dy * self.mask
+
+    def update(self, lr): pass
+
+
+class MultiHeadAttention:
+    """标准多头注意力，含完整反向传播 + Causal Mask。"""
+
+    def __init__(self, d_model, n_heads):
+        assert d_model % n_heads == 0
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+
+        lim = np.sqrt(6.0 / (d_model + d_model))
+        self.W_q = np.random.uniform(-lim, lim, (d_model, d_model))
+        self.W_k = np.random.uniform(-lim, lim, (d_model, d_model))
+        self.W_v = np.random.uniform(-lim, lim, (d_model, d_model))
+        self.W_o = np.random.uniform(-lim, lim, (d_model, d_model))
+        self.b_q = np.zeros((1, d_model))
+        self.b_k = np.zeros((1, d_model))
+        self.b_v = np.zeros((1, d_model))
+        self.b_o = np.zeros((1, d_model))
+
+        for attr in ['grad_W_q', 'grad_W_k', 'grad_W_v', 'grad_W_o',
+                     'grad_b_q', 'grad_b_k', 'grad_b_v', 'grad_b_o']:
+            setattr(self, attr, np.zeros_like(getattr(self, attr.replace('grad_', ''))))
+
+    def forward(self, X):
+        self.X = X
+        B, S, D = X.shape
+        H, d_k = self.n_heads, self.d_k
+
+        self.Q = X @ self.W_q + self.b_q
+        self.K = X @ self.W_k + self.b_k
+        self.V = X @ self.W_v + self.b_v
+
+        self.Q_h = self.Q.reshape(B, S, H, d_k).transpose(0, 2, 1, 3)
+        self.K_h = self.K.reshape(B, S, H, d_k).transpose(0, 2, 1, 3)
+        self.V_h = self.V.reshape(B, S, H, d_k).transpose(0, 2, 1, 3)
+
+        self.scores = self.Q_h @ self.K_h.transpose(0, 1, 3, 2) / np.sqrt(d_k)
+
+        # Causal mask
+        mask = np.tril(np.ones((S, S), dtype=bool))
+        self.scores = np.where(mask[None, None, :, :], self.scores, -1e9)
+        self.attn = softmax(self.scores, axis=-1)
+
+        self.out_h = self.attn @ self.V_h
+        self.concat = self.out_h.transpose(0, 2, 1, 3).reshape(B, S, D)
+        return self.concat @ self.W_o + self.b_o
+
+    def backward(self, dOutput):
+        B, S, D = dOutput.shape
+        H, d_k = self.n_heads, self.d_k
+
+        concat_2d = self.concat.reshape(-1, D)
+        dOut_2d = dOutput.reshape(-1, D)
+        self.grad_W_o = concat_2d.T @ dOut_2d
+        self.grad_b_o = np.sum(dOut_2d, axis=0, keepdims=True)
+        dConcat = dOut_2d @ self.W_o.T
+        dConcat = dConcat.reshape(B, S, D)
+
+        dOut_h = dConcat.reshape(B, S, H, d_k).transpose(0, 2, 1, 3)
+        dV_h = self.attn.transpose(0, 1, 3, 2) @ dOut_h
+        dAttn = dOut_h @ self.V_h.transpose(0, 1, 3, 2)
+        dScores = softmax_backward(dAttn, self.attn)
+
+        # Causal mask 梯度只影响下三角
+        mask = np.tril(np.ones((S, S), dtype=bool))
+        dScores = np.where(mask[None, None, :, :], dScores, 0)
+
+        dQ_h = dScores @ self.K_h / np.sqrt(d_k)
+        dK_h = dScores.transpose(0, 1, 3, 2) @ self.Q_h / np.sqrt(d_k)
+
+        dQ = dQ_h.transpose(0, 2, 1, 3).reshape(B, S, D)
+        dK = dK_h.transpose(0, 2, 1, 3).reshape(B, S, D)
+        dV = dV_h.transpose(0, 2, 1, 3).reshape(B, S, D)
+
+        X_2d = self.X.reshape(-1, D)
+        self.grad_W_q = X_2d.T @ dQ.reshape(-1, D)
+        self.grad_W_k = X_2d.T @ dK.reshape(-1, D)
+        self.grad_W_v = X_2d.T @ dV.reshape(-1, D)
+        self.grad_b_q = np.sum(dQ.reshape(-1, D), axis=0, keepdims=True)
+        self.grad_b_k = np.sum(dK.reshape(-1, D), axis=0, keepdims=True)
+        self.grad_b_v = np.sum(dV.reshape(-1, D), axis=0, keepdims=True)
+
+        dX = (dQ.reshape(-1, D) @ self.W_q.T +
+              dK.reshape(-1, D) @ self.W_k.T +
+              dV.reshape(-1, D) @ self.W_v.T)
+        return dX.reshape(B, S, D)
+
+    def update(self, lr):
+        self.W_q -= lr * self.grad_W_q; self.b_q -= lr * self.grad_b_q
+        self.W_k -= lr * self.grad_W_k; self.b_k -= lr * self.grad_b_k
+        self.W_v -= lr * self.grad_W_v; self.b_v -= lr * self.grad_b_v
+        self.W_o -= lr * self.grad_W_o; self.b_o -= lr * self.grad_b_o
+
+
+class FFN:
+    def __init__(self, d_model, d_ff):
+        self.fc1 = LinearLayer(d_model, d_ff)
+        self.relu = ReLULayer()
+        self.fc2 = LinearLayer(d_ff, d_model)
+
+    def forward(self, x):
+        h = self.fc1.forward(x)
+        h = self.relu.forward(h)
+        return self.fc2.forward(h)
+
+    def backward(self, dy):
+        dh = self.fc2.backward(dy)
+        dh = self.relu.backward(dh)
+        return self.fc1.backward(dh)
+
+    def update(self, lr):
+        self.fc1.update(lr)
+        self.fc2.update(lr)
+
+
+# =============================================================================
+# DPO Loss — 核心考点
+# =============================================================================
+
+class DPOLoss:
+    """
+    Direct Preference Optimization Loss。
+
+    对于偏好数据 (x, y_w, y_l)：
+
+        L_DPO = -log σ(β · (log π(y_w|x) - log π(y_l|x)
+                             - log π_ref(y_w|x) + log π_ref(y_l|x)))
+
+    令  h = β · (log P_w - log P_l - log P_ref_w + log P_ref_l)
+        L = -log σ(h) = log(1 + exp(-h))
+
+    梯度推导：
+    ─────────────────────────────────────────────────────────────────
+    1. dL/dh = -(1 - σ(h)) = -α,  其中 α = 1/(1+exp(h)) = 1 - σ(h)
+
+    2. log P = log_softmax(logits)[target]
+       d(log P)/d(logits) = one_hot(target) - softmax(logits)
+
+    3. 链式法则：
+       dL/d(logits_w) = (-α) · β · (one_hot_w - softmax_w)
+                      = α·β · (softmax_w - one_hot_w)
+
+       dL/d(logits_l) = (-α) · β · (-1) · (one_hot_l - softmax_l)
+                      = α·β · (one_hot_l - softmax_l)
+                      = -α·β · (softmax_l - one_hot_l)
+
+    观察：
+    - y_w 梯度 = 标准 CE backward（提升 target 概率）
+    - y_l 梯度 = 标准 CE backward 的负方向（降低 target 概率）
+    - 缩放系数 α·β，α 随训练递减（模型越确信，更新越小）
+    """
+
+    def __init__(self, beta=0.1):
+        self.beta = beta
+
+    def forward(self, logits_w, logits_l, target_w, target_l,
+                logPref_w, logPref_l, response_mask):
+        self.logits_w = logits_w
+        self.logits_l = logits_l
+        self.target_w = target_w
+        self.target_l = target_l
+        self.response_mask = response_mask
+        self.logPref_w = logPref_w
+        self.logPref_l = logPref_l
+
+        B, S, V = logits_w.shape
+        flat_w = logits_w.reshape(-1, V)
+        flat_l = logits_l.reshape(-1, V)
+        flat_tw = target_w.reshape(-1)
+        flat_tl = target_l.reshape(-1)
+        flat_mask = response_mask.reshape(-1)
+
+        def logsm(z):
+            m = np.max(z, axis=-1, keepdims=True)
+            return z - m - np.log(np.sum(np.exp(z - m), axis=-1, keepdims=True))
+
+        logsm_w = logsm(flat_w)
+        logsm_l = logsm(flat_l)
+
+        logPw_pos = logsm_w[np.arange(B*S), flat_tw] * flat_mask
+        logPl_pos = logsm_l[np.arange(B*S), flat_tl] * flat_mask
+
+        logPw = np.sum(logPw_pos)
+        logPl = np.sum(logPl_pos)
+        self.logPw = logPw
+        self.logPl = logPl
+
+        self.h = self.beta * (logPw - logPl - logPref_w + logPref_l)
+        if self.h > 20:
+            self.sigma_h = 1.0
+        elif self.h < -20:
+            self.sigma_h = 0.0
+        else:
+            self.sigma_h = 1.0 / (1.0 + np.exp(-self.h))
+        self.alpha = 1.0 - self.sigma_h
+
+        return -np.log(self.sigma_h + 1e-10)
+
+    def backward(self):
+        B, S, V = self.logits_w.shape
+        flat_w = self.logits_w.reshape(-1, V)
+        flat_l = self.logits_l.reshape(-1, V)
+        flat_tw = self.target_w.reshape(-1)
+        flat_tl = self.target_l.reshape(-1)
+        flat_mask = self.response_mask.reshape(-1)
+
+        sm_w = softmax(flat_w, axis=-1)
+        sm_l = softmax(flat_l, axis=-1)
+
+        oh_w = np.zeros_like(sm_w)
+        oh_l = np.zeros_like(sm_l)
+        oh_w[np.arange(B*S), flat_tw] = 1.0
+        oh_l[np.arange(B*S), flat_tl] = 1.0
+
+        scale = self.alpha * self.beta
+
+        # dL/d(logits_w) = α·β · (softmax_w - one_hot_w)
+        dlogits_w = scale * (sm_w - oh_w)
+        # dL/d(logits_l) = α·β · (one_hot_l - softmax_l)
+        dlogits_l = scale * (oh_l - sm_l)
+
+        dlogits_w = dlogits_w * flat_mask[:, None]
+        dlogits_l = dlogits_l * flat_mask[:, None]
+
+        return dlogits_w.reshape(B, S, V), dlogits_l.reshape(B, S, V)
+
+
+# =============================================================================
+# One-Layer Transformer
+# =============================================================================
+
+class OneLayerTransformer:
+    def __init__(self, vocab_size, d_model=16, n_heads=4, d_ff=32, max_len=16):
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+
+        lim = np.sqrt(6.0 / (vocab_size + d_model))
+        self.token_embed = np.random.uniform(-lim, lim, (vocab_size, d_model))
+        self.pos_embed = np.random.uniform(-lim, lim, (max_len, d_model))
+
+        self.mha = MultiHeadAttention(d_model, n_heads)
+        self.ffn = FFN(d_model, d_ff)
+        self.proj = LinearLayer(d_model, vocab_size)
+
+    def embed(self, tokens):
+        B, S = tokens.shape
+        tok_emb = self.token_embed[tokens]
+        pos_emb = self.pos_embed[np.arange(S)]
+        return tok_emb + pos_emb[np.newaxis, :, :]
+
+    def forward(self, tokens):
+        self.tokens = tokens
+        self.embedded = self.embed(tokens)
+        mha_out = self.mha.forward(self.embedded)
+        self.after_mha = self.embedded + mha_out
+        ffn_out = self.ffn.forward(self.after_mha)
+        self.output = self.after_mha + ffn_out
+        logits = self.proj.forward(self.output)
+        return logits
+
+    def backward(self, dLogits):
+        dOutput = self.proj.backward(dLogits)
+        dAfterMha = dOutput.copy()
+        dFfn = dOutput.copy()
+        dAfterMha += self.ffn.backward(dFfn)
+        dEmbedded = dAfterMha.copy()
+        dMha = dAfterMha.copy()
+        dEmbedded += self.mha.backward(dMha)
+        return dEmbedded
+
+    def clear_gradients(self):
+        for attr in ['grad_W_q', 'grad_W_k', 'grad_W_v', 'grad_W_o',
+                     'grad_b_q', 'grad_b_k', 'grad_b_v', 'grad_b_o']:
+            setattr(self.mha, attr, np.zeros_like(getattr(self.mha, attr)))
+        self.ffn.fc1.grad_W.fill(0); self.ffn.fc1.grad_b.fill(0)
+        self.ffn.fc2.grad_W.fill(0); self.ffn.fc2.grad_b.fill(0)
+        self.proj.grad_W.fill(0); self.proj.grad_b.fill(0)
+
+    def update(self, lr, dEmbed, tokens):
+        if dEmbed.ndim == 2:
+            self.token_embed -= lr * dEmbed
+        else:
+            np.add.at(self.token_embed, tokens, -lr * dEmbed)
+        self.mha.update(lr)
+        self.ffn.update(lr)
+        self.proj.update(lr)
+
+    def get_ref_log_probs(self, tokens, targets, response_mask):
+        logits = self.forward(tokens)
+        B, S, V = logits.shape
+        flat = logits.reshape(-1, V)
+        flat_t = targets.reshape(-1)
+        flat_mask = response_mask.reshape(-1)
+        m = np.max(flat, axis=-1, keepdims=True)
+        logsm = flat - m - np.log(np.sum(np.exp(flat - m), axis=-1, keepdims=True))
+        logP = logsm[np.arange(B*S), flat_t] * flat_mask
+        return np.sum(logP)
+
+
+# =============================================================================
+# 训练流程
+# =============================================================================
+
+def make_preference_dataset(n, vocab_size, seed=123):
+    """
+    生成固定偏好数据集：
+      - prompt = [a]
+      - y_w   = [a+1] (preferred)
+      - y_l   = [a+3] (dispreferred)
+    """
+    rng = np.random.RandomState(seed)
+    data = []
+    for _ in range(n):
+        a = rng.randint(0, vocab_size)
+        prompt = np.array([[a]])
+        y_w = np.array([[(a + 1) % vocab_size]])
+        y_l = np.array([[(a + 3) % vocab_size]])
+        seq_w = np.concatenate([prompt, y_w], axis=1)
+        seq_l = np.concatenate([prompt, y_l], axis=1)
+        mask = np.zeros((1, 2), dtype=bool)
+        mask[:, 1:] = True
+        data.append((seq_w, seq_l, mask))
+    return data
+
+
+def train_dpo(policy, ref_model, data, epochs=500, lr=0.02, beta=0.3,
+              batch_size=32, grad_clip=1.0):
+    dpo_loss_fn = DPOLoss(beta=beta)
+    N = len(data)
+    losses = []
+    pref_accs = []
+
+    for epoch in range(epochs):
+        idx = np.random.permutation(N)
+        total_loss = 0.0
+
+        for i in range(0, N, batch_size):
+            bidx = idx[i:i+batch_size]
+
+            dW_proj = np.zeros_like(policy.proj.W)
+            db_proj = np.zeros_like(policy.proj.b)
+            dW_emb = np.zeros_like(policy.token_embed)
+            batch_loss = 0.0
+            mha_grads = {name: np.zeros_like(getattr(policy.mha, f'grad_{name}'))
+                         for name in ['W_q', 'W_k', 'W_v', 'W_o',
+                                      'b_q', 'b_k', 'b_v', 'b_o']}
+            ffn1_W = np.zeros_like(policy.ffn.fc1.W)
+            ffn1_b = np.zeros_like(policy.ffn.fc1.b)
+            ffn2_W = np.zeros_like(policy.ffn.fc2.W)
+            ffn2_b = np.zeros_like(policy.ffn.fc2.b)
+
+            for j in bidx:
+                seq_w, seq_l, mask = data[j]
+                lpw_ref = ref_model.get_ref_log_probs(seq_w, seq_w, mask)
+                lpl_ref = ref_model.get_ref_log_probs(seq_l, seq_l, mask)
+
+                logits_w = policy.forward(seq_w)
+                logits_l = policy.forward(seq_l)
+                loss = dpo_loss_fn.forward(logits_w, logits_l, seq_w, seq_l,
+                                           lpw_ref, lpl_ref, mask)
+                batch_loss += loss
+                d_w, d_l = dpo_loss_fn.backward()
+
+                for dlogits in [d_w, d_l]:
+                    policy.clear_gradients()
+                    dEmbed = policy.backward(dlogits)
+                    for name in mha_grads:
+                        mha_grads[name] += getattr(policy.mha, f'grad_{name}')
+                    ffn1_W += policy.ffn.fc1.grad_W
+                    ffn1_b += policy.ffn.fc1.grad_b
+                    ffn2_W += policy.ffn.fc2.grad_W
+                    ffn2_b += policy.ffn.fc2.grad_b
+                    dW_proj += policy.proj.grad_W
+                    db_proj += policy.proj.grad_b
+                    np.add.at(dW_emb, policy.tokens, dEmbed)
+
+            n = len(bidx)
+            for name in mha_grads:
+                setattr(policy.mha, f'grad_{name}', gradient_clip(mha_grads[name] / n, grad_clip))
+            policy.ffn.fc1.grad_W = gradient_clip(ffn1_W / n, grad_clip)
+            policy.ffn.fc1.grad_b = gradient_clip(ffn1_b / n, grad_clip)
+            policy.ffn.fc2.grad_W = gradient_clip(ffn2_W / n, grad_clip)
+            policy.ffn.fc2.grad_b = gradient_clip(ffn2_b / n, grad_clip)
+            policy.proj.grad_W = gradient_clip(dW_proj / n, grad_clip)
+            policy.proj.grad_b = gradient_clip(db_proj / n, grad_clip)
+            policy.update(lr, gradient_clip(dW_emb / n, grad_clip), policy.tokens)
+            total_loss += batch_loss
+
+        losses.append(total_loss / N)
+
+        if epoch % 100 == 0 or epoch == epochs - 1:
+            correct = sum(1 for sw, sl, m in data
+                          if policy.get_ref_log_probs(sw, sw, m) > policy.get_ref_log_probs(sl, sl, m))
+            pref_accs.append(correct / N)
+            print(f"  epoch {epoch:>5}: DPO_loss={losses[-1]:.6f}, "
+                  f"pref_acc={correct/N:.4f}, alpha={dpo_loss_fn.alpha:.4f}")
+
+    return losses, pref_accs
+
+
+# =============================================================================
+# 梯度数值验证
+# =============================================================================
+
+def verify_dpo_gradients():
+    print("=" * 70)
+    print("DPO 梯度数值验证")
+    print("=" * 70)
+
+    np.random.seed(42)
+    beta = 0.1
+    B, S, V = 2, 4, 8
+
+    logits_w = np.random.randn(B, S, V)
+    logits_l = np.random.randn(B, S, V)
+    target_w = np.random.randint(0, V, size=(B, S))
+    target_l = np.random.randint(0, V, size=(B, S))
+    mask = np.ones((B, S), dtype=bool)
+    logPref_w, logPref_l = -5.0, -6.0
+
+    dpo = DPOLoss(beta=beta)
+    loss = dpo.forward(logits_w, logits_l, target_w, target_l,
+                       logPref_w, logPref_l, mask)
+    dlogits_w, dlogits_l = dpo.backward()
+
+    eps = 1e-5
+
+    def numerical_grad(logits, is_win):
+        grad = np.zeros_like(logits)
+        for i in range(B):
+            for j in range(S):
+                for k in range(V):
+                    lp = logits.copy()
+                    lp[i, j, k] += eps
+                    if is_win:
+                        loss_p = dpo.forward(lp, logits_l, target_w, target_l,
+                                             logPref_w, logPref_l, mask)
+                    else:
+                        loss_p = dpo.forward(logits_w, lp, target_w, target_l,
+                                             logPref_w, logPref_l, mask)
+                    grad[i, j, k] = (loss_p - loss) / eps
+        return grad
+
+    grad_w_num = numerical_grad(logits_w, True)
+    grad_l_num = numerical_grad(logits_l, False)
+
+    rel_err_w = np.linalg.norm(grad_w_num - dlogits_w) / (np.linalg.norm(grad_w_num) + 1e-10)
+    rel_err_l = np.linalg.norm(grad_l_num - dlogits_l) / (np.linalg.norm(grad_l_num) + 1e-10)
+
+    print(f"logits_w 梯度相对误差: {rel_err_w:.2e}")
+    print(f"logits_l 梯度相对误差: {rel_err_l:.2e}")
+    print("✓ 梯度推导验证通过" if rel_err_w < 1e-4 and rel_err_l < 1e-4 else "✗ 梯度推导有错误！")
+    return rel_err_w, rel_err_l
+
+
+# =============================================================================
+# Demo
+# =============================================================================
+
+def demo():
+    verify_dpo_gradients()
+
+    print("\n" + "=" * 70)
+    print("DPO 训练 One-Layer MHA Transformer")
+    print("=" * 70)
+
+    vocab_size = 8
+    data = make_preference_dataset(64, vocab_size)
+
+    policy = OneLayerTransformer(vocab_size, d_model=16, n_heads=4, d_ff=32, max_len=8)
+    ref_model = deepcopy(policy)
+
+    print(f"配置: vocab={vocab_size}, d_model=16, heads=4, data_size=64")
+    print(f"      beta=0.3, lr=0.02, epochs=500, batch=32")
+
+    losses, pref_accs = train_dpo(
+        policy, ref_model, data,
+        epochs=500, lr=0.02, beta=0.3, batch_size=32, grad_clip=1.0)
+
+    print("\n" + "=" * 70)
+    print("训练结果总结")
+    print("=" * 70)
+    print(f"初始 DPO Loss: {losses[0]:.6f}")
+    print(f"最终 DPO Loss: {losses[-1]:.6f}")
+    print(f"偏好对准确率:  {pref_accs[-1]:.4f}")
+
+    # 对比：不同 β
+    print("\n" + "=" * 70)
+    print("对比: 不同 β 对 DPO 训练的影响")
+    print("=" * 70)
+    print(f"{'beta':>8} | {'Final Loss':>12} | {'Pref Acc':>10}")
+    print("-" * 40)
+
+    for b in [0.1, 0.3, 0.5]:
+        p = OneLayerTransformer(vocab_size, d_model=16, n_heads=4, d_ff=32, max_len=8)
+        ref = deepcopy(p)
+        l, a = train_dpo(p, ref, data, epochs=300, lr=0.02, beta=b,
+                         batch_size=32, grad_clip=1.0)
+        print(f"{b:>8.2f} | {l[-1]:>12.6f} | {a[-1]:>10.4f}")
+
+
+if __name__ == "__main__":
+    demo()

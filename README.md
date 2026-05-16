@@ -39,6 +39,7 @@
 | 031 | [最大矩形](./algorithms/maximal-rectangle/) | 单调栈、动态规划、柱状图 | ⭐⭐⭐⭐ |
 | 032 | [投机解码工程实现](./algorithms/speculative-decoding/) | LLM推理、拒绝采样、工程架构 | ⭐⭐⭐⭐ |
 | 033 | [投机解码进阶: Exact vs Fallback](./algorithms/speculative-decoding-advanced/) | LLM推理优化、工程权衡、分布偏差 | ⭐⭐⭐⭐⭐ |
+| 034 | [DPO 训练 MHA Transformer](./algorithms/dpo-training-mha/) | DPO、偏好优化、梯度推导、收敛性 | ⭐⭐⭐⭐⭐ |
 
 ## 目录结构
 
