@@ -34,6 +34,7 @@
 | 026 | [MoE Transformer Layer Forward & Backward](./algorithms/moe-transformer/) | 混合专家、手写反向传播、负载均衡 | ⭐⭐⭐⭐⭐ |
 | 027 | [生日问题](./algorithms/birthday-problem/) | 概率论、组合数学、反直觉 | ⭐⭐ |
 | 028 | [等待模式问题 — 抛硬币与收集问题](./algorithms/waiting-for-patterns/) | 概率论、马尔可夫链、期望值 | ⭐⭐⭐ |
+| 029 | [坏芯片检测问题](./algorithms/chip-testing-problem/) | 组合数学、信息论、决策树 | ⭐⭐⭐ |
 
 ## 目录结构
 
