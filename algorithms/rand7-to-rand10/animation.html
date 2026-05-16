@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用 Rand7 构造 Rand10 — 拒绝采样</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif;
+    min-height:100vh; overflow-x:hidden;
+  }
+  .container { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; margin-bottom:4px; font-size:1.5rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.82rem; margin-bottom:16px; }
+
+  .layout { display:flex; gap:14px; flex-wrap:wrap; }
+  .panel {
+    background:#16213e; border-radius:12px; padding:14px;
+    border:1px solid #0f3460;
+  }
+  .left { flex:1 1 340px; }
+  .right { flex:2 1 520px; }
+
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  .control-group { display:flex; flex-direction:column; gap:2px; }
+  .control-group label { font-size:0.7rem; color:#aab; }
+  button {
+    background:#e94560; color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:0.8rem;
+    transition:opacity .2s;
+  }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+
+  .stats { display:flex; gap:10px; margin-top:8px; font-size:0.78rem; color:#aab; flex-wrap:wrap; }
+  .stats b { color:#fff; }
+  .stat-box { background:#0d1b2a; padding:6px 10px; border-radius:6px; border:1px solid #1a3a5c; }
+
+  .legend { display:flex; gap:12px; margin-top:6px; font-size:0.72rem; flex-wrap:wrap; }
+  .legend span { display:flex; align-items:center; gap:4px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+  .info-text { font-size:0.8rem; color:#aab; margin-top:8px; line-height:1.5; }
+
+  h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎲 用 Rand7 构造 Rand10</h1>
+  <div class="subtitle">拒绝采样 — 扩展范围 → 裁剪 → 均匀分布</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="controls">
+        <button id="btnGen1">生成 1 个</button>
+        <button id="btnGen100">生成 100 个</button>
+        <button id="btnGen1000">生成 1000 个</button>
+        <button id="btnReset" class="secondary">⟲ 重置</button>
+      </div>
+      <div class="stats">
+        <div class="stat-box">总生成: <b id="statTotal">0</b></div>
+        <div class="stat-box">rand7 调用: <b id="statCalls">0</b></div>
+        <div class="stat-box">拒绝次数: <b id="statReject">0</b></div>
+        <div class="stat-box">卡方: <b id="statChi2">--</b></div>
+      </div>
+      <canvas id="gridCanvas" width="340" height="260" style="margin-top:10px;"></canvas>
+      <div class="legend">
+        <span><i class="dot" style="background:#90be6d;"></i>接受 (1~40)</span>
+        <span><i class="dot" style="background:#e94560;"></i>拒绝 (41~49)</span>
+        <span><i class="dot" style="background:#f9c74f;"></i>最新生成</span>
+      </div>
+    </div>
+
+    <div class="panel right">
+      <canvas id="barCanvas" width="540" height="200"></canvas>
+      <div class="stats">
+        <div class="stat-box">1: <b id="c1">0</b></div>
+        <div class="stat-box">2: <b id="c2">0</b></div>
+        <div class="stat-box">3: <b id="c3">0</b></div>
+        <div class="stat-box">4: <b id="c4">0</b></div>
+        <div class="stat-box">5: <b id="c5">0</b></div>
+        <div class="stat-box">6: <b id="c6">0</b></div>
+        <div class="stat-box">7: <b id="c7">0</b></div>
+        <div class="stat-box">8: <b id="c8">0</b></div>
+        <div class="stat-box">9: <b id="c9">0</b></div>
+        <div class="stat-box">10: <b id="c10">0</b></div>
+      </div>
+      <canvas id="chiCanvas" width="540" height="100" style="margin-top:8px;"></canvas>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px;">
+    <h3>📊 通用方法: rand(a) → rand(b)</h3>
+    <div class="controls">
+      <div class="control-group">
+        <label>源 a</label>
+        <input id="aSlider" type="range" min="2" max="10" value="7">
+        <span id="aVal" style="font-size:0.7rem;color:#e94560;">7</span>
+      </div>
+      <div class="control-group">
+        <label>目标 b</label>
+        <input id="bSlider" type="range" min="2" max="20" value="10">
+        <span id="bVal" style="font-size:0.7rem;color:#e94560;">10</span>
+      </div>
+      <button id="btnSimGeneral">▶ 模拟</button>
+      <button id="btnResetGeneral" class="secondary">⟲</button>
+    </div>
+    <div class="stats">
+      <div class="stat-box">最小 k: <b id="statK">--</b></div>
+      <div class="stat-box">拒绝率: <b id="statRejectRate">--</b></div>
+      <div class="stat-box">期望调用: <b id="statExpected">--</b></div>
+      <div class="stat-box">卡方: <b id="statChi2Gen">--</b></div>
+    </div>
+    <canvas id="generalCanvas" width="1060" height="120" style="margin-top:8px;"></canvas>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// Rand7 → Rand10 模拟器
+// =============================================================================
+
+let totalGen = 0, totalCalls = 0, rejectCount = 0;
+let counts = new Array(11).fill(0); // 1-indexed
+let lastNum = null;
+let lastAccepted = false;
+
+function rand7() {
+  return Math.floor(Math.random() * 7) + 1;
+}
+
+function rand10_once() {
+  let calls = 0;
+  while(true) {
+    calls += 2;
+    const num = (rand7() - 1) * 7 + rand7();
+    lastNum = num;
+    if(num <= 40) {
+      lastAccepted = true;
+      totalCalls += calls;
+      return (num - 1) % 10 + 1;
+    }
+    rejectCount++;
+    lastAccepted = false;
+  }
+}
+
+function generate(n) {
+  for(let i=0; i<n; i++) {
+    const r = rand10_once();
+    counts[r]++;
+    totalGen++;
+  }
+  updateStats();
+  drawGrid();
+  drawBars();
+  drawChi2();
+}
+
+function updateStats() {
+  document.getElementById('statTotal').textContent = totalGen;
+  document.getElementById('statCalls').textContent = totalCalls;
+  document.getElementById('statReject').textContent = rejectCount;
+  for(let i=1; i<=10; i++) {
+    document.getElementById('c'+i).textContent = counts[i];
+  }
+
+  if(totalGen > 0) {
+    const expected = totalGen / 10;
+    let chi2 = 0;
+    for(let i=1; i<=10; i++) {
+      chi2 += Math.pow(counts[i] - expected, 2) / expected;
+    }
+    document.getElementById('statChi2').textContent = chi2.toFixed(2);
+  }
+}
+
+// =============================================================================
+// Grid Canvas (1~49 visualization)
+// =============================================================================
+
+const gridCanvas = document.getElementById('gridCanvas');
+const gctx = gridCanvas.getContext('2d');
+
+function drawGrid() {
+  const w = gridCanvas.width, h = gridCanvas.height;
+  gctx.clearRect(0, 0, w, h);
+
+  const cols = 7, rows = 7;
+  const cellW = (w - 30) / cols, cellH = (h - 40) / rows;
+  const startX = 15, startY = 30;
+
+  for(let i=0; i<49; i++) {
+    const row = Math.floor(i / cols);
+    const col = i % cols;
+    const x = startX + col * cellW;
+    const y = startY + row * cellH;
+    const num = i + 1;
+
+    let color;
+    if(num === lastNum) {
+      color = lastAccepted ? '#f9c74f' : '#e94560';
+    } else if(num <= 40) {
+      color = '#1a3a5c';
+    } else {
+      color = '#0d1b2a';
+    }
+
+    gctx.fillStyle = color;
+    gctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+    gctx.strokeStyle = num <= 40 ? '#2a4a6c' : '#1a2a3c';
+    gctx.lineWidth = 1;
+    gctx.strokeRect(x, y, cellW, cellH);
+
+    gctx.fillStyle = num <= 40 ? '#90be6d' : '#667';
+    if(num === lastNum) gctx.fillStyle = '#1a1a2e';
+    gctx.font = '9px sans-serif'; gctx.textAlign = 'center'; gctx.textBaseline = 'middle';
+    gctx.fillText(num, x + cellW/2, y + cellH/2);
+  }
+
+  // Labels
+  gctx.fillStyle = '#889'; gctx.font = '10px sans-serif'; gctx.textAlign = 'left';
+  gctx.fillText('接受区 (1~40)', startX, 18);
+  gctx.fillStyle = '#e94560';
+  gctx.fillText('拒绝区 (41~49)', startX + 100, 18);
+}
+
+// =============================================================================
+// Bar Chart
+// =============================================================================
+
+const barCanvas = document.getElementById('barCanvas');
+const bctx = barCanvas.getContext('2d');
+
+function drawBars() {
+  const w = barCanvas.width, h = barCanvas.height;
+  const pad = {l:35, t:15, r:10, b:25};
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  bctx.clearRect(0, 0, w, h);
+
+  // Grid
+  bctx.strokeStyle = '#1a3a5c'; bctx.lineWidth = 1;
+  for(let i=0; i<=4; i++) {
+    const y = pad.t + ch * (i/4);
+    bctx.beginPath(); bctx.moveTo(pad.l, y); bctx.lineTo(pad.l+cw, y); bctx.stroke();
+  }
+
+  const maxCount = Math.max(...counts.slice(1), 1);
+  const barW = cw / 10 - 6;
+
+  for(let i=1; i<=10; i++) {
+    const x = pad.l + (i-1) * (cw/10) + 3;
+    const bh = (counts[i] / maxCount) * ch;
+    const y = pad.t + ch - bh;
+
+    bctx.fillStyle = '#4cc9f0';
+    bctx.fillRect(x, y, barW, bh);
+
+    // expected line
+    if(totalGen > 0) {
+      const expY = pad.t + ch - (totalGen/10 / maxCount) * ch;
+      bctx.strokeStyle = '#e94560'; bctx.setLineDash([3,3]); bctx.lineWidth = 1;
+      bctx.beginPath(); bctx.moveTo(x, expY); bctx.lineTo(x+barW, expY); bctx.stroke();
+      bctx.setLineDash([]);
+    }
+
+    bctx.fillStyle = '#fff'; bctx.font = '10px sans-serif'; bctx.textAlign = 'center';
+    bctx.fillText(i, x + barW/2, pad.t + ch + 14);
+  }
+
+  // Y axis
+  bctx.fillStyle = '#889'; bctx.font = '9px sans-serif'; bctx.textAlign = 'right';
+  for(let i=0; i<=4; i++) {
+    const v = Math.round(maxCount * (1 - i/4));
+    bctx.fillText(v, pad.l - 4, pad.t + ch*(i/4) + 3);
+  }
+}
+
+// =============================================================================
+// Chi2 Canvas
+// =============================================================================
+
+const chiCanvas = document.getElementById('chiCanvas');
+const cctx = chiCanvas.getContext('2d');
+
+function drawChi2() {
+  const w = chiCanvas.width, h = chiCanvas.height;
+  cctx.clearRect(0, 0, w, h);
+
+  if(totalGen === 0) return;
+
+  const expected = totalGen / 10;
+  const chi2 = counts.slice(1).reduce((sum, c) => sum + Math.pow(c - expected, 2) / expected, 0);
+  const critical95 = 16.92; // df=9
+
+  // Draw bar
+  const maxChi = Math.max(chi2, critical95) * 1.2;
+  const barH = (chi2 / maxChi) * (h - 30);
+  const criticalH = (critical95 / maxChi) * (h - 30);
+
+  cctx.fillStyle = chi2 <= critical95 ? '#90be6d' : '#e94560';
+  cctx.fillRect(30, h - 20 - barH, 40, barH);
+
+  cctx.strokeStyle = '#e94560'; cctx.setLineDash([4,4]); cctx.lineWidth = 1;
+  cctx.beginPath(); cctx.moveTo(20, h - 20 - criticalH); cctx.lineTo(w-20, h - 20 - criticalH); cctx.stroke();
+  cctx.setLineDash([]);
+
+  cctx.fillStyle = '#e94560'; cctx.font = '9px sans-serif'; cctx.textAlign = 'left';
+  cctx.fillText('95%临界值=16.92', 80, h - 20 - criticalH - 4);
+
+  cctx.fillStyle = '#fff'; cctx.font = 'bold 11px sans-serif'; cctx.textAlign = 'center';
+  cctx.fillText(`χ²=${chi2.toFixed(2)}`, 50, h - 20 - barH - 6);
+}
+
+// =============================================================================
+// 通用方法模拟
+// =============================================================================
+
+let genCounts = new Array(21).fill(0);
+let genTotal = 0;
+let aGen = 7, bGen = 10;
+
+function theoreticalExpected(a, b) {
+  let k = 1;
+  while(Math.pow(a, k) < b) k++;
+  const maxRange = Math.pow(a, k);
+  const maxAccept = Math.floor(maxRange / b) * b;
+  return k * maxRange / maxAccept;
+}
+
+function theoreticalRejectRate(a, b) {
+  let k = 1;
+  while(Math.pow(a, k) < b) k++;
+  const maxRange = Math.pow(a, k);
+  const maxAccept = Math.floor(maxRange / b) * b;
+  return (maxRange - maxAccept) / maxRange;
+}
+
+function randA(a) {
+  return Math.floor(Math.random() * a) + 1;
+}
+
+function randGeneral(a, b) {
+  let k = 1;
+  while(Math.pow(a, k) < b) k++;
+  const maxRange = Math.pow(a, k);
+  const maxAccept = Math.floor(maxRange / b) * b;
+  while(true) {
+    let num = 0;
+    for(let i=0; i<k; i++) {
+      num = num * a + (randA(a) - 1);
+    }
+    num++;
+    if(num <= maxAccept) {
+      return (num - 1) % b + 1;
+    }
+  }
+}
+
+function simulateGeneral(n) {
+  genCounts.fill(0);
+  genTotal = n;
+  for(let i=0; i<n; i++) {
+    const r = randGeneral(aGen, bGen);
+    genCounts[r]++;
+  }
+
+  document.getElementById('statK').textContent = (()=>{
+    let k=1; while(Math.pow(aGen,k)<bGen) k++; return k;
+  })();
+  document.getElementById('statRejectRate').textContent = (theoreticalRejectRate(aGen, bGen)*100).toFixed(1)+'%';
+  document.getElementById('statExpected').textContent = theoreticalExpected(aGen, bGen).toFixed(2);
+
+  const expected = n / bGen;
+  let chi2 = 0;
+  for(let i=1; i<=bGen; i++) chi2 += Math.pow(genCounts[i] - expected, 2) / expected;
+  document.getElementById('statChi2Gen').textContent = chi2.toFixed(2);
+
+  drawGeneral();
+}
+
+function drawGeneral() {
+  const canvas = document.getElementById('generalCanvas');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  if(genTotal === 0) return;
+
+  const pad = {l:30, t:10, r:10, b:25};
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+  const maxCount = Math.max(...genCounts.slice(1, bGen+1), 1);
+  const barW = cw / bGen - 4;
+
+  for(let i=1; i<=bGen; i++) {
+    const x = pad.l + (i-1) * (cw/bGen) + 2;
+    const bh = (genCounts[i] / maxCount) * ch;
+    const y = pad.t + ch - bh;
+
+    ctx.fillStyle = '#4cc9f0';
+    ctx.fillRect(x, y, barW, bh);
+
+    ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(i, x + barW/2, pad.t + ch + 12);
+  }
+}
+
+// =============================================================================
+// Events
+// =============================================================================
+
+document.getElementById('btnGen1').onclick = () => generate(1);
+document.getElementById('btnGen100').onclick = () => generate(100);
+document.getElementById('btnGen1000').onclick = () => generate(1000);
+document.getElementById('btnReset').onclick = () => {
+  totalGen = 0; totalCalls = 0; rejectCount = 0;
+  counts = new Array(11).fill(0);
+  lastNum = null;
+  updateStats();
+  drawGrid();
+  drawBars();
+  drawChi2();
+};
+
+document.getElementById('aSlider').oninput = function() {
+  aGen = parseInt(this.value);
+  document.getElementById('aVal').textContent = aGen;
+};
+document.getElementById('bSlider').oninput = function() {
+  bGen = parseInt(this.value);
+  document.getElementById('bVal').textContent = bGen;
+};
+document.getElementById('btnSimGeneral').onclick = () => simulateGeneral(10000);
+document.getElementById('btnResetGeneral').onclick = () => {
+  genCounts.fill(0); genTotal = 0;
+  drawGeneral();
+  document.getElementById('statK').textContent = '--';
+  document.getElementById('statRejectRate').textContent = '--';
+  document.getElementById('statExpected').textContent = '--';
+  document.getElementById('statChi2Gen').textContent = '--';
+};
+
+// Init
+drawGrid();
+drawBars();
+drawGeneral();
+</script>
+</body>
+</html>
