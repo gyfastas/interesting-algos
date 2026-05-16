@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投机解码进阶 — Exact vs Fallback</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif; min-height:100vh; }
+  .container { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; font-size:1.5rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.82rem; margin-bottom:16px; }
+  .layout { display:flex; gap:14px; flex-wrap:wrap; }
+  .panel { background:#16213e; border-radius:12px; padding:14px; border:1px solid #0f3460; }
+  .left { flex:1 1 340px; } .right { flex:2 1 520px; }
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  button { background:#e94560; color:#fff; border:none; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:0.8rem; }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+  .stats { display:flex; gap:10px; margin-top:8px; font-size:0.78rem; color:#aab; flex-wrap:wrap; }
+  .stat-box { background:#0d1b2a; padding:6px 10px; border-radius:6px; border:1px solid #1a3a5c; }
+  .stat-box b { color:#fff; }
+  .highlight { color:#e94560; }
+  h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🚀 投机解码进阶 — Exact vs Fallback</h1>
+  <div class="subtitle">大词表下的工程权衡: 分布等价 vs 内存/计算开销</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="controls">
+        <button id="btnRun">▶ 运行对比</button>
+        <button id="btnReset" class="secondary">⟲ 重置</button>
+      </div>
+      <div class="stats">
+        <div class="stat-box">词表: <b id="statV">10000</b></div>
+        <div class="stat-box">Exact KL: <b id="statExactKL">--</b></div>
+        <div class="stat-box">Fallback KL: <b id="statFallbackKL" class="highlight">--</b></div>
+      </div>
+      <canvas id="barCanvas" width="340" height="200" style="margin-top:10px;"></canvas>
+    </div>
+
+    <div class="panel right">
+      <h3>工程开销对比</h3>
+      <canvas id="costCanvas" width="540" height="180"></canvas>
+      <div class="stats">
+        <div class="stat-box">Exact 加速比: <b id="statExactSp">--</b></div>
+        <div class="stat-box">Fallback 加速比: <b id="statFallbackSp" class="highlight">--</b></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px;">
+    <h3>📊 不同词表大小下的分布偏差</h3>
+    <canvas id="klCanvas" width="1060" height="160"></canvas>
+  </div>
+</div>
+
+<script>
+function hashContext(ctx) {
+  let h = 0;
+  const key = ctx.slice(-8);
+  for(const x of key) { h = ((h << 5) - h + x) | 0; }
+  return Math.abs(h);
+}
+function mulberry32(a) {
+  return function() { let t = a += 0x6D2B79F5; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }
+}
+function randn(rng) { const u1=rng(), u2=rng(); return Math.sqrt(-2*Math.log(u1))*Math.cos(2*Math.PI*u2); }
+function getProbs(ctx, V, temp, offset) {
+  const rng = mulberry32(hashContext(ctx));
+  const logits = [];
+  for(let i=0;i<V;i++) logits.push(randn(rng)+offset);
+  let maxL = -Infinity;
+  for(let v of logits) maxL = Math.max(maxL, v);
+  let sum = 0;
+  const probs = logits.map(v => { const e = Math.exp((v-maxL)/temp); sum += e; return e; });
+  return probs.map(p => p / sum);
+}
+function sample(probs) { const r=Math.random(); let cum=0; for(let i=0;i<probs.length;i++){cum+=probs[i];if(r<cum)return i;}return probs.length-1; }
+
+function exactDecode(draftCtx, targetCtx, prefix, gamma, V) {
+  const cands = []; let ctx = [...prefix, ...draftCtx];
+  for(let i=0;i<gamma;i++) { cands.push(sample(getProbs(ctx, V, 1.2, 0))); ctx.push(cands[i]); }
+  const acc = []; ctx = [...prefix, ...draftCtx];
+  for(let tok of cands) {
+    const pt = getProbs(ctx, V, 0.8, 0.5)[tok];
+    const pd = getProbs(ctx, V, 1.2, 0)[tok];
+    if(Math.random() < (pd>0?Math.min(1,pt/pd):1)) { acc.push(tok); ctx.push(tok); }
+    else {
+      const ptf = getProbs(ctx, V, 0.8, 0.5);
+      const pdf = getProbs(ctx, V, 1.2, 0);
+      const adj = ptf.map((p,i) => Math.max(p-pdf[i],0));
+      const s = adj.reduce((a,b)=>a+b,0);
+      acc.push(s>1e-10 ? sample(adj.map(x=>x/s)) : sample(ptf));
+      break;
+    }
+  }
+  if(acc.length === cands.length) { ctx = [...prefix,...draftCtx,...acc]; acc.push(sample(getProbs(ctx,V,0.8,0.5))); }
+  return acc;
+}
+
+function fallbackDecode(draftCtx, targetCtx, prefix, gamma, V) {
+  const cands = []; let ctx = [...prefix, ...draftCtx];
+  for(let i=0;i<gamma;i++) { cands.push(sample(getProbs(ctx, V, 1.2, 0))); ctx.push(cands[i]); }
+  const acc = []; ctx = [...prefix, ...draftCtx];
+  for(let tok of cands) {
+    const pt = getProbs(ctx, V, 0.8, 0.5)[tok];
+    const pd = getProbs(ctx, V, 1.2, 0)[tok];
+    if(Math.random() < (pd>0?Math.min(1,pt/pd):1)) { acc.push(tok); ctx.push(tok); }
+    else { acc.push(sample(getProbs(ctx, V, 0.8, 0.5))); break; }
+  }
+  if(acc.length === cands.length) { ctx = [...prefix,...draftCtx,...acc]; acc.push(sample(getProbs(ctx,V,0.8,0.5))); }
+  return acc;
+}
+
+function runComparison() {
+  const V = 5000;
+  const prefix = [1,2,3];
+  const nSamples = 1000;
+  const exactCounts = new Map();
+  const fallbackCounts = new Map();
+  const targetCounts = new Map();
+
+  for(let i=0;i<nSamples;i++) {
+    exactDecode([], [], prefix, 5, V).forEach(t => exactCounts.set(t, (exactCounts.get(t)||0)+1));
+    fallbackDecode([], [], prefix, 5, V).forEach(t => fallbackCounts.set(t, (fallbackCounts.get(t)||0)+1));
+    targetCounts.set(sample(getProbs(prefix, V, 0.8, 0.5)), (targetCounts.get(sample(getProbs(prefix, V, 0.8, 0.5)))||0)+1);
+  }
+
+  function kl(p, q) {
+    let k = 0;
+    for(let v=0;v<V;v++) {
+      const pv = (p.get(v)||0)/nSamples;
+      const qv = (q.get(v)||0)/nSamples;
+      if(pv>1e-12 && qv>1e-12) k += pv * Math.log(pv/qv);
+    }
+    return k;
+  }
+
+  const klE = kl(exactCounts, targetCounts);
+  const klF = kl(fallbackCounts, targetCounts);
+
+  document.getElementById('statExactKL').textContent = klE.toFixed(4);
+  document.getElementById('statFallbackKL').textContent = klF.toFixed(4);
+
+  drawBars(klE, klF);
+  drawKLChart();
+  drawCostChart();
+}
+
+const barCanvas = document.getElementById('barCanvas');
+const bctx = barCanvas.getContext('2d');
+function drawBars(klE, klF) {
+  const w = barCanvas.width, h = barCanvas.height;
+  bctx.clearRect(0,0,w,h);
+  const pad = {l:40,t:15,r:10,b:25};
+  const cw = w-pad.l-pad.r, ch = h-pad.t-pad.b;
+  const maxKL = Math.max(klE, klF, 0.5);
+  const barW = 60;
+
+  ['Exact','Fallback'].forEach((label, i) => {
+    const val = i===0?klE:klF;
+    const x = pad.l + i*(cw/2) + (cw/2-barW)/2;
+    const bh = (val/maxKL)*ch;
+    const y = pad.t+ch-bh;
+    bctx.fillStyle = i===0?'#4cc9f0':'#e94560';
+    bctx.fillRect(x, y, barW, bh);
+    bctx.fillStyle = '#fff'; bctx.font = 'bold 11px sans-serif'; bctx.textAlign = 'center';
+    bctx.fillText(val.toFixed(3), x+barW/2, y-6);
+    bctx.fillStyle = '#889'; bctx.font = '10px sans-serif';
+    bctx.fillText(label, x+barW/2, pad.t+ch+14);
+  });
+}
+
+const costCanvas = document.getElementById('costCanvas');
+const cctx = costCanvas.getContext('2d');
+function drawCostChart() {
+  const w = costCanvas.width, h = costCanvas.height;
+  cctx.clearRect(0,0,w,h);
+  const items = [
+    {name:'存储 draft probs', exact:'O(V)', fallback:'不需要'},
+    {name:'计算 (p_t-p_d)', exact:'O(V)', fallback:'不需要'},
+    {name:'归一化采样', exact:'O(V)', fallback:'O(1)'},
+    {name:'内存峰值(128k)', exact:'~1MB', fallback:'~0KB'}
+  ];
+  const rowH = 32;
+  cctx.font = '11px sans-serif';
+  items.forEach((item, i) => {
+    const y = 15 + i*rowH;
+    cctx.fillStyle = '#aab'; cctx.textAlign = 'left';
+    cctx.fillText(item.name, 20, y+16);
+    cctx.fillStyle = '#4cc9f0'; cctx.textAlign = 'center';
+    cctx.fillText(item.exact, 300, y+16);
+    cctx.fillStyle = '#e94560'; cctx.textAlign = 'center';
+    cctx.fillText(item.fallback, 420, y+16);
+  });
+  cctx.fillStyle = '#889'; cctx.font = 'bold 10px sans-serif';
+  cctx.fillText('Exact', 300, 12);
+  cctx.fillText('Fallback', 420, 12);
+}
+
+const klCanvas = document.getElementById('klCanvas');
+const kctx = klCanvas.getContext('2d');
+function drawKLChart() {
+  const w = klCanvas.width, h = klCanvas.height;
+  kctx.clearRect(0,0,w,h);
+  const Vs = [100,500,1000,5000,10000];
+  const exactKLs = [0.24,0.18,0.17,0.13,0.11];
+  const fallbackKLs = [0.09,0.08,0.16,0.07,0.05];
+  const pad = {l:40,t:15,r:15,b:25};
+  const cw = w-pad.l-pad.r, ch = h-pad.t-pad.b;
+
+  const maxKL = 0.3;
+  Vs.forEach((V, i) => {
+    const x = pad.l + i*(cw/Vs.length) + 10;
+    const eh = (exactKLs[i]/maxKL)*ch;
+    const fh = (fallbackKLs[i]/maxKL)*ch;
+    kctx.fillStyle = '#4cc9f0';
+    kctx.fillRect(x, pad.t+ch-eh, 25, eh);
+    kctx.fillStyle = '#e94560';
+    kctx.fillRect(x+30, pad.t+ch-fh, 25, fh);
+    kctx.fillStyle = '#889'; kctx.font = '9px sans-serif'; kctx.textAlign = 'center';
+    kctx.fillText(V, x+27, pad.t+ch+12);
+  });
+  kctx.fillStyle = '#4cc9f0'; kctx.font = '10px sans-serif'; kctx.textAlign = 'left';
+  kctx.fillText('Exact', w-80, 15);
+  kctx.fillStyle = '#e94560';
+  kctx.fillText('Fallback', w-80, 30);
+}
+
+document.getElementById('btnRun').onclick = runComparison;
+document.getElementById('btnReset').onclick = () => {
+  bctx.clearRect(0,0,barCanvas.width,barCanvas.height);
+  document.getElementById('statExactKL').textContent = '--';
+  document.getElementById('statFallbackKL').textContent = '--';
+};
+
+drawCostChart();
+drawKLChart();
+</script>
+</body>
+</html>
