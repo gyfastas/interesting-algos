@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>等待模式问题 — 抛硬币 & 收集问题</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif;
+    min-height:100vh; overflow-x:hidden;
+  }
+  .container { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; margin-bottom:4px; font-size:1.5rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.85rem; margin-bottom:18px; }
+
+  .layout { display:flex; gap:14px; flex-wrap:wrap; }
+  .panel {
+    background:#16213e; border-radius:12px; padding:14px;
+    border:1px solid #0f3460;
+  }
+  .left { flex:1 1 320px; }
+  .right { flex:2 1 520px; }
+
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
+  .control-group { display:flex; flex-direction:column; gap:2px; }
+  .control-group label { font-size:0.7rem; color:#aab; }
+  input[type=range] { width:110px; }
+  button {
+    background:#e94560; color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:0.8rem;
+  }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+  button.active { background:#f9c74f; color:#1a1a2e; }
+
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+
+  .stats { display:flex; gap:12px; margin-top:8px; font-size:0.78rem; color:#aab; flex-wrap:wrap; }
+  .stats b { color:#fff; }
+  .stat-box { background:#0d1b2a; padding:6px 10px; border-radius:6px; border:1px solid #1a3a5c; }
+
+  .seq-display {
+    font-family:'Courier New',monospace; font-size:0.85rem;
+    background:#0d1b2a; padding:8px 10px; border-radius:6px;
+    border:1px solid #1a3a5c; min-height:36px; margin-top:8px;
+    word-break:break-all; line-height:1.6;
+  }
+  .seq-H { color:#4cc9f0; font-weight:bold; }
+  .seq-T { color:#f9c74f; }
+  .seq-highlight { background:#e94560; color:#fff; border-radius:3px; padding:0 2px; }
+
+  .dice-grid {
+    display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;
+  }
+  .dice-face {
+    width:36px; height:36px; display:flex; align-items:center; justify-content:center;
+    border-radius:6px; border:1px solid #1a3a5c; background:#0d1b2a;
+    font-size:0.85rem; font-weight:bold; color:#667;
+    transition:all .2s;
+  }
+  .dice-face.collected { background:#e94560; color:#fff; border-color:#e94560; }
+
+  h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
+  .tab-bar { display:flex; gap:4px; margin-bottom:10px; }
+  .tab { padding:5px 12px; border-radius:6px; cursor:pointer; font-size:0.78rem;
+    background:#0d1b2a; color:#889; border:1px solid #1a3a5c; }
+  .tab.active { background:#e94560; color:#fff; border-color:#e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🪙 等待模式问题</h1>
+  <div class="subtitle">连续正面 vs 收集所有面 — 期望等待时间对比</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="tab-bar">
+        <div class="tab active" onclick="switchTab('coin')">🪙 抛硬币</div>
+        <div class="tab" onclick="switchTab('dice')">🎲 骰子</div>
+      </div>
+
+      <div id="coinPanel">
+        <div class="controls">
+          <div class="control-group">
+            <label>目标 N</label>
+            <input id="coinNSlider" type="range" min="1" max="8" value="3">
+            <span id="coinNVal" style="font-size:0.7rem;color:#e94560;">3</span>
+          </div>
+          <button id="btnFlip">▶ 抛一次</button>
+          <button id="btnAutoFlip" class="secondary">⏵ 自动</button>
+          <button id="btnResetCoin" class="secondary">⟲</button>
+        </div>
+        <div class="stats">
+          <div class="stat-box">当前连续: <b id="statStreak">0</b></div>
+          <div class="stat-box">总次数: <b id="statTotalCoin">0</b></div>
+          <div class="stat-box">理论期望: <b id="statExpCoin">--</b></div>
+        </div>
+        <div class="seq-display" id="coinSeq">点击"抛一次"开始...</div>
+      </div>
+
+      <div id="dicePanel" style="display:none;">
+        <div class="controls">
+          <div class="control-group">
+            <label>面数 N</label>
+            <input id="diceNSlider" type="range" min="2" max="12" value="6">
+            <span id="diceNVal" style="font-size:0.7rem;color:#e94560;">6</span>
+          </div>
+          <button id="btnRoll">▶ 投一次</button>
+          <button id="btnAutoRoll" class="secondary">⏵ 自动</button>
+          <button id="btnResetDice" class="secondary">⟲</button>
+        </div>
+        <div class="stats">
+          <div class="stat-box">已收集: <b id="statCollected">0</b>/<b id="statTotalFaces">6</b></div>
+          <div class="stat-box">总次数: <b id="statTotalDice">0</b></div>
+          <div class="stat-box">理论期望: <b id="statExpDice">--</b></div>
+        </div>
+        <div class="dice-grid" id="diceGrid"></div>
+        <div class="seq-display" id="diceSeq" style="margin-top:6px; min-height:28px;"></div>
+      </div>
+    </div>
+
+    <div class="panel right">
+      <h3>📈 期望增长对比 & Monte Carlo</h3>
+      <div class="controls">
+        <button id="btnSimCoin">▶ 模拟硬币</button>
+        <button id="btnSimDice" class="secondary">▶ 模拟骰子</button>
+        <button id="btnResetSim" class="secondary">⟲ 重置</button>
+        <div class="control-group">
+          <label>速度</label>
+          <input id="simSpeed" type="range" min="1" max="30" value="5">
+        </div>
+      </div>
+      <canvas id="chartCanvas" width="540" height="200"></canvas>
+      <div class="stats">
+        <div class="stat-box">模拟次数: <b id="simTrials">0</b></div>
+        <div class="stat-box">硬币均值: <b id="simMeanCoin">--</b></div>
+        <div class="stat-box">骰子均值: <b id="simMeanDice">--</b></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// 数学函数
+// =============================================================================
+
+function exactCoin(N) { return Math.pow(2, N+1) - 2; }
+function exactDice(N) {
+  let h = 0;
+  for(let i=1;i<=N;i++) h += 1/i;
+  return N * h;
+}
+
+// =============================================================================
+// 抛硬币模拟
+// =============================================================================
+
+let coinN = 3;
+let coinStreak = 0;
+let coinTotal = 0;
+let coinSeq = [];
+let coinAuto = null;
+
+function updateCoinUI() {
+  document.getElementById('statStreak').textContent = coinStreak;
+  document.getElementById('statTotalCoin').textContent = coinTotal;
+  document.getElementById('statExpCoin').textContent = exactCoin(coinN).toFixed(0);
+
+  const el = document.getElementById('coinSeq');
+  let html = '';
+  let streakRun = 0;
+  for(let i=0;i<coinSeq.length;i++) {
+    const ch = coinSeq[i];
+    const isH = ch === 'H';
+    let cls = isH ? 'seq-H' : 'seq-T';
+    // highlight the winning streak
+    if(i >= coinSeq.length - coinStreak && isH && coinStreak === coinN) {
+      cls += ' seq-highlight';
+    }
+    html += `<span class="${cls}">${ch}</span>`;
+  }
+  if(coinSeq.length === 0) html = '点击"抛一次"开始...';
+  el.innerHTML = html;
+}
+
+function flipCoin() {
+  const isHead = Math.random() < 0.5;
+  coinTotal++;
+  coinSeq.push(isHead ? 'H' : 'T');
+  if(isHead) {
+    coinStreak++;
+    if(coinStreak >= coinN) {
+      // achieved!
+      coinStreak = coinN;
+      stopCoinAuto();
+    }
+  } else {
+    coinStreak = 0;
+  }
+  // trim display
+  if(coinSeq.length > 80) coinSeq = coinSeq.slice(-80);
+  updateCoinUI();
+}
+
+function resetCoin() {
+  coinStreak = 0; coinTotal = 0; coinSeq = [];
+  stopCoinAuto();
+  updateCoinUI();
+}
+
+function startCoinAuto() {
+  if(coinAuto) return;
+  document.getElementById('btnAutoFlip').classList.add('active');
+  document.getElementById('btnAutoFlip').textContent = '⏸ 暂停';
+  coinAuto = setInterval(()=>{
+    if(coinStreak < coinN) flipCoin();
+    else stopCoinAuto();
+  }, 150);
+}
+
+function stopCoinAuto() {
+  if(coinAuto) { clearInterval(coinAuto); coinAuto = null; }
+  document.getElementById('btnAutoFlip').classList.remove('active');
+  document.getElementById('btnAutoFlip').textContent = '⏵ 自动';
+}
+
+// =============================================================================
+// 骰子模拟
+// =============================================================================
+
+let diceN = 6;
+let diceSeen = new Set();
+let diceTotal = 0;
+let diceSeq = [];
+let diceAuto = null;
+
+function updateDiceUI() {
+  document.getElementById('statCollected').textContent = diceSeen.size;
+  document.getElementById('statTotalFaces').textContent = diceN;
+  document.getElementById('statTotalDice').textContent = diceTotal;
+  document.getElementById('statExpDice').textContent = exactDice(diceN).toFixed(1);
+
+  const grid = document.getElementById('diceGrid');
+  grid.innerHTML = '';
+  for(let i=1;i<=diceN;i++) {
+    const div = document.createElement('div');
+    div.className = 'dice-face' + (diceSeen.has(i) ? ' collected' : '');
+    div.textContent = i;
+    grid.appendChild(div);
+  }
+
+  const el = document.getElementById('diceSeq');
+  el.textContent = diceSeq.length > 0 ? diceSeq.slice(-40).join(' ') : '';
+}
+
+function rollDice() {
+  const face = Math.floor(Math.random() * diceN) + 1;
+  diceTotal++;
+  diceSeq.push(face);
+  diceSeen.add(face);
+  if(diceSeq.length > 60) diceSeq = diceSeq.slice(-60);
+  updateDiceUI();
+  if(diceSeen.size === diceN) stopDiceAuto();
+}
+
+function resetDice() {
+  diceSeen = new Set(); diceTotal = 0; diceSeq = [];
+  stopDiceAuto();
+  updateDiceUI();
+}
+
+function startDiceAuto() {
+  if(diceAuto) return;
+  document.getElementById('btnAutoRoll').classList.add('active');
+  document.getElementById('btnAutoRoll').textContent = '⏸ 暂停';
+  diceAuto = setInterval(()=>{
+    if(diceSeen.size < diceN) rollDice();
+    else stopDiceAuto();
+  }, 150);
+}
+
+function stopDiceAuto() {
+  if(diceAuto) { clearInterval(diceAuto); diceAuto = null; }
+  document.getElementById('btnAutoRoll').classList.remove('active');
+  document.getElementById('btnAutoRoll').textContent = '⏵ 自动';
+}
+
+// =============================================================================
+// 图表 Canvas
+// =============================================================================
+
+const chartCanvas = document.getElementById('chartCanvas');
+const ctx = chartCanvas.getContext('2d');
+
+function drawChart() {
+  const w = chartCanvas.width, h = chartCanvas.height;
+  const pad = {l:45, t:12, r:15, b:28};
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Grid
+  ctx.strokeStyle = '#1a3a5c'; ctx.lineWidth = 1;
+  for(let i=0;i<=4;i++){
+    const y = pad.t + ch*(i/4);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l+cw, y); ctx.stroke();
+  }
+  for(let i=0;i<=10;i++){
+    const x = pad.l + cw*(i/10);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t+ch); ctx.stroke();
+  }
+
+  // Coin curve (exponential)
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  const maxN = 12;
+  for(let n=1; n<=maxN; n++){
+    const x = pad.l + (n/maxN)*cw;
+    const y = pad.t + ch * (1 - Math.min(exactCoin(n)/3000, 1));
+    if(n===1) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // Dice curve (N*H_N)
+  ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for(let n=1; n<=maxN; n++){
+    const x = pad.l + (n/maxN)*cw;
+    const y = pad.t + ch * (1 - Math.min(exactDice(n)/3000, 1));
+    if(n===1) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // Sim points
+  if(simCoinData.length > 0) {
+    ctx.fillStyle = '#e94560';
+    for(let d of simCoinData) {
+      const x = pad.l + (d.n/maxN)*cw;
+      const y = pad.t + ch * (1 - Math.min(d.mean/3000, 1));
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+    }
+  }
+  if(simDiceData.length > 0) {
+    ctx.fillStyle = '#4cc9f0';
+    for(let d of simDiceData) {
+      const x = pad.l + (d.n/maxN)*cw;
+      const y = pad.t + ch * (1 - Math.min(d.mean/3000, 1));
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#889'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  const labels = [3000, 2250, 1500, 750, 0];
+  for(let i=0;i<=4;i++){
+    ctx.fillText(labels[i], pad.l-4, pad.t + ch*(i/4)+3);
+  }
+  ctx.textAlign = 'center';
+  for(let i=0;i<=6;i++){
+    const v = i*2;
+    ctx.fillText(v, pad.l + cw*(v/maxN), pad.t+ch+14);
+  }
+  ctx.fillStyle = '#aab';
+  ctx.fillText('N', pad.l + cw/2, h-4);
+
+  // Legend
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#e94560'; ctx.fillRect(pad.l+cw-100, pad.t+4, 10, 10);
+  ctx.fillStyle = '#eee'; ctx.fillText('连续正面 E=2^(N+1)-2', pad.l+cw-85, pad.t+13);
+  ctx.fillStyle = '#4cc9f0'; ctx.fillRect(pad.l+cw-100, pad.t+20, 10, 10);
+  ctx.fillStyle = '#eee'; ctx.fillText('收集骰子 E=N*H_N', pad.l+cw-85, pad.t+29);
+}
+
+// =============================================================================
+// Monte Carlo Sim
+// =============================================================================
+
+let simCoinData = [];
+let simDiceData = [];
+let simRunning = false;
+let simAnimId = null;
+let simTrials = 0;
+let simCoinSum = 0, simCoinCount = 0;
+let simDiceSum = 0, simDiceCount = 0;
+
+function simCoinTrial() {
+  const n = coinN;
+  let count = 0, streak = 0;
+  while(streak < n) {
+    count++;
+    streak = (Math.random() < 0.5) ? streak+1 : 0;
+  }
+  return count;
+}
+
+function simDiceTrial() {
+  const n = diceN;
+  const seen = new Set();
+  let count = 0;
+  while(seen.size < n) {
+    count++;
+    seen.add(Math.floor(Math.random()*n)+1);
+  }
+  return count;
+}
+
+function runSimStep() {
+  const speed = parseInt(document.getElementById('simSpeed').value);
+  for(let k=0; k<speed; k++) {
+    const c = simCoinTrial();
+    simCoinSum += c; simCoinCount++;
+    const d = simDiceTrial();
+    simDiceSum += d; simDiceCount++;
+    simTrials++;
+  }
+
+  simCoinData = [{n: coinN, mean: simCoinSum/simCoinCount}];
+  simDiceData = [{n: diceN, mean: simDiceSum/simDiceCount}];
+
+  document.getElementById('simTrials').textContent = simTrials.toLocaleString();
+  document.getElementById('simMeanCoin').textContent = (simCoinSum/simCoinCount).toFixed(1);
+  document.getElementById('simMeanDice').textContent = (simDiceSum/simDiceCount).toFixed(1);
+  drawChart();
+}
+
+function simLoop() {
+  if(!simRunning) return;
+  runSimStep();
+  simAnimId = requestAnimationFrame(simLoop);
+}
+
+// =============================================================================
+// Tab Switch
+// =============================================================================
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('coinPanel').style.display = tab==='coin' ? 'block' : 'none';
+  document.getElementById('dicePanel').style.display = tab==='dice' ? 'block' : 'none';
+}
+
+// =============================================================================
+// Events
+// =============================================================================
+
+document.getElementById('coinNSlider').oninput = function() {
+  coinN = parseInt(this.value);
+  document.getElementById('coinNVal').textContent = coinN;
+  resetCoin();
+};
+document.getElementById('btnFlip').onclick = flipCoin;
+document.getElementById('btnAutoFlip').onclick = function() {
+  if(coinAuto) stopCoinAuto(); else startCoinAuto();
+};
+document.getElementById('btnResetCoin').onclick = resetCoin;
+
+document.getElementById('diceNSlider').oninput = function() {
+  diceN = parseInt(this.value);
+  document.getElementById('diceNVal').textContent = diceN;
+  resetDice();
+};
+document.getElementById('btnRoll').onclick = rollDice;
+document.getElementById('btnAutoRoll').onclick = function() {
+  if(diceAuto) stopDiceAuto(); else startDiceAuto();
+};
+document.getElementById('btnResetDice').onclick = resetDice;
+
+document.getElementById('btnSimCoin').onclick = function() {
+  if(simRunning) { simRunning=false; cancelAnimationFrame(simAnimId); this.textContent='▶ 模拟硬币'; }
+  else { simRunning=true; this.textContent='⏸ 暂停'; simLoop(); }
+};
+document.getElementById('btnSimDice').onclick = function() {
+  if(simRunning) { simRunning=false; cancelAnimationFrame(simAnimId); document.getElementById('btnSimCoin').textContent='▶ 模拟硬币'; }
+  else { simRunning=true; document.getElementById('btnSimCoin').textContent='⏸ 暂停'; simLoop(); }
+};
+document.getElementById('btnResetSim').onclick = function() {
+  simRunning = false; cancelAnimationFrame(simAnimId);
+  simCoinData = []; simDiceData = [];
+  simTrials = 0; simCoinSum = simCoinCount = simDiceSum = simDiceCount = 0;
+  document.getElementById('simTrials').textContent = '0';
+  document.getElementById('simMeanCoin').textContent = '--';
+  document.getElementById('simMeanDice').textContent = '--';
+  document.getElementById('btnSimCoin').textContent = '▶ 模拟硬币';
+  drawChart();
+};
+
+// Init
+updateCoinUI();
+updateDiceUI();
+drawChart();
+</script>
+</body>
+</html>
