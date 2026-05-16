@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>最大矩形 — Maximal Rectangle</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif;
+    min-height:100vh; overflow-x:hidden;
+  }
+  .container { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; margin-bottom:4px; font-size:1.5rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.82rem; margin-bottom:16px; }
+
+  .layout { display:flex; gap:14px; flex-wrap:wrap; }
+  .panel {
+    background:#16213e; border-radius:12px; padding:14px;
+    border:1px solid #0f3460;
+  }
+  .left { flex:1 1 320px; }
+  .right { flex:2 1 520px; }
+
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  button {
+    background:#e94560; color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:0.8rem;
+    transition:opacity .2s;
+  }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+
+  .stats { display:flex; gap:10px; margin-top:8px; font-size:0.78rem; color:#aab; flex-wrap:wrap; }
+  .stats b { color:#fff; }
+  .stat-box { background:#0d1b2a; padding:6px 10px; border-radius:6px; border:1px solid #1a3a5c; }
+
+  .info-text { font-size:0.8rem; color:#aab; margin-top:8px; line-height:1.5; }
+
+  h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>📐 最大矩形 — Maximal Rectangle</h1>
+  <div class="subtitle">逐行转化为柱状图 + 单调栈求最大矩形</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="controls">
+        <button id="btnRandom">🎲 随机矩阵</button>
+        <button id="btnClassic">经典示例</button>
+        <button id="btnReset" class="secondary">⟲ 重置</button>
+      </div>
+      <div class="stats">
+        <div class="stat-box">当前行: <b id="statRow">0</b></div>
+        <div class="stat-box">当前最大: <b id="statMax" style="color:#e94560;">0</b></div>
+      </div>
+      <div class="controls" style="margin-top:10px;">
+        <button id="btnStep">▶ 下一步</button>
+        <button id="btnAuto" class="secondary">⏵ 自动</button>
+      </div>
+      <div class="info-text" id="infoText">
+        点击"经典示例"或"随机矩阵"加载数据，然后点击"下一步"开始。
+      </div>
+    </div>
+
+    <div class="panel right">
+      <canvas id="matrixCanvas" width="520" height="220"></canvas>
+      <canvas id="histCanvas" width="520" height="180" style="margin-top:8px;"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// 数据
+// =============================================================================
+
+let matrix = [];
+let m = 0, n = 0;
+let heights = [];
+let currentRow = -1;
+let maxArea = 0;
+let bestRect = null; // {r1, c1, r2, c2}
+let autoTimer = null;
+
+function loadClassic() {
+  matrix = [
+    [1,0,1,0,0],
+    [1,0,1,1,1],
+    [1,1,1,1,1],
+    [1,0,0,1,0]
+  ];
+  reset();
+}
+
+function loadRandom() {
+  m = Math.floor(Math.random() * 3) + 3;
+  n = Math.floor(Math.random() * 4) + 4;
+  matrix = [];
+  for(let i=0; i<m; i++) {
+    const row = [];
+    for(let j=0; j<n; j++) row.push(Math.random() < 0.6 ? 1 : 0);
+    matrix.push(row);
+  }
+  reset();
+}
+
+function reset() {
+  m = matrix.length;
+  n = matrix[0].length;
+  heights = new Array(n).fill(0);
+  currentRow = -1;
+  maxArea = 0;
+  bestRect = null;
+  stopAuto();
+  document.getElementById('statRow').textContent = '0';
+  document.getElementById('statMax').textContent = '0';
+  document.getElementById('infoText').textContent = '点击"下一步"逐行计算。';
+  drawMatrix();
+  drawHistogram();
+}
+
+// =============================================================================
+// 核心算法 (JS 版)
+// =============================================================================
+
+function largestRectangleArea(heights) {
+  const stack = [];
+  let maxArea = 0;
+  let best = null;
+  const N = heights.length;
+  for(let i=0; i<=N; i++) {
+    const h = i < N ? heights[i] : 0;
+    while(stack.length && h < heights[stack[stack.length-1]]) {
+      const top = stack.pop();
+      const height = heights[top];
+      const width = stack.length === 0 ? i : i - stack[stack.length-1] - 1;
+      const area = height * width;
+      if(area > maxArea) {
+        maxArea = area;
+        best = { height, width, right: i - 1, left: stack.length === 0 ? 0 : stack[stack.length-1] + 1 };
+      }
+    }
+    stack.push(i);
+  }
+  return { maxArea, best };
+}
+
+function step() {
+  if(currentRow >= m - 1) {
+    stopAuto();
+    document.getElementById('infoText').textContent = `完成！最大矩形面积 = ${maxArea}`;
+    return;
+  }
+  currentRow++;
+
+  // Update heights
+  for(let j=0; j<n; j++) {
+    heights[j] = matrix[currentRow][j] === 1 ? heights[j] + 1 : 0;
+  }
+
+  const { maxArea: area, best: rect } = largestRectangleArea(heights);
+  if(area > maxArea) {
+    maxArea = area;
+    if(rect) {
+      bestRect = {
+        r1: currentRow - rect.height + 1,
+        c1: rect.left,
+        r2: currentRow,
+        c2: rect.right
+      };
+    }
+  }
+
+  document.getElementById('statRow').textContent = currentRow + 1;
+  document.getElementById('statMax').textContent = maxArea;
+  document.getElementById('infoText').textContent =
+    `第${currentRow+1}行: heights=[${heights.join(',')}], 当前行最大=${area}, 全局最大=${maxArea}`;
+
+  drawMatrix();
+  drawHistogram();
+}
+
+// =============================================================================
+// Canvas 绘制
+// =============================================================================
+
+const matCanvas = document.getElementById('matrixCanvas');
+const mctx = matCanvas.getContext('2d');
+
+function drawMatrix() {
+  const w = matCanvas.width, h = matCanvas.height;
+  mctx.clearRect(0, 0, w, h);
+
+  const cellW = Math.min(40, (w - 40) / n);
+  const cellH = Math.min(40, (h - 40) / m);
+  const startX = (w - n * cellW) / 2;
+  const startY = (h - m * cellH) / 2;
+
+  for(let i=0; i<m; i++) {
+    for(let j=0; j<n; j++) {
+      const x = startX + j * cellW;
+      const y = startY + i * cellH;
+      const val = matrix[i][j];
+
+      // Highlight best rectangle
+      const inBest = bestRect && i >= bestRect.r1 && i <= bestRect.r2 && j >= bestRect.c1 && j <= bestRect.c2;
+      const inCurrentRow = i === currentRow;
+
+      if(inBest) {
+        mctx.fillStyle = '#e94560';
+      } else if(val === 1) {
+        mctx.fillStyle = inCurrentRow ? '#4cc9f0' : '#1a3a5c';
+      } else {
+        mctx.fillStyle = '#0d1b2a';
+      }
+
+      mctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+      mctx.strokeStyle = '#0f3460';
+      mctx.lineWidth = 1;
+      mctx.strokeRect(x, y, cellW, cellH);
+
+      mctx.fillStyle = inBest ? '#fff' : (val === 1 ? '#90be6d' : '#667');
+      mctx.font = 'bold 12px sans-serif';
+      mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+      mctx.fillText(val, x + cellW/2, y + cellH/2);
+    }
+  }
+}
+
+const histCanvas = document.getElementById('histCanvas');
+const hctx = histCanvas.getContext('2d');
+
+function drawHistogram() {
+  const w = histCanvas.width, h = histCanvas.height;
+  const pad = {l:30, t:15, r:10, b:25};
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  hctx.clearRect(0, 0, w, h);
+
+  if(currentRow < 0) {
+    hctx.fillStyle = '#667'; hctx.font = '12px sans-serif'; hctx.textAlign = 'center';
+    hctx.fillText('加载矩阵后点击"下一步"查看柱状图', w/2, h/2);
+    return;
+  }
+
+  // Grid
+  hctx.strokeStyle = '#1a3a5c'; hctx.lineWidth = 1;
+  for(let i=0; i<=4; i++) {
+    const y = pad.t + ch*(i/4);
+    hctx.beginPath(); hctx.moveTo(pad.l, y); hctx.lineTo(pad.l+cw, y); hctx.stroke();
+  }
+
+  const maxH = Math.max(...heights, 1);
+  const barW = cw / n - 4;
+
+  for(let j=0; j<n; j++) {
+    const x = pad.l + j * (cw/n) + 2;
+    const bh = (heights[j] / maxH) * ch;
+    const y = pad.t + ch - bh;
+
+    hctx.fillStyle = heights[j] > 0 ? '#4cc9f0' : '#0d1b2a';
+    hctx.fillRect(x, y, barW, bh);
+    hctx.strokeStyle = '#2a4a6c'; hctx.lineWidth = 1;
+    hctx.strokeRect(x, y, barW, bh);
+
+    if(heights[j] > 0) {
+      hctx.fillStyle = '#fff'; hctx.font = '9px sans-serif'; hctx.textAlign = 'center';
+      hctx.fillText(heights[j], x + barW/2, y - 6);
+    }
+
+    hctx.fillStyle = '#889'; hctx.font = '9px sans-serif'; hctx.textAlign = 'center';
+    hctx.fillText(j, x + barW/2, pad.t + ch + 12);
+  }
+
+  // Y axis
+  hctx.fillStyle = '#889'; hctx.font = '9px sans-serif'; hctx.textAlign = 'right';
+  for(let i=0; i<=4; i++) {
+    const v = Math.round(maxH * (1 - i/4));
+    hctx.fillText(v, pad.l - 4, pad.t + ch*(i/4) + 3);
+  }
+}
+
+// =============================================================================
+// Events
+// =============================================================================
+
+document.getElementById('btnClassic').onclick = loadClassic;
+document.getElementById('btnRandom').onclick = loadRandom;
+document.getElementById('btnReset').onclick = reset;
+document.getElementById('btnStep').onclick = function() { stopAuto(); step(); };
+document.getElementById('btnAuto').onclick = function() {
+  if(autoTimer) stopAuto(); else startAuto();
+};
+
+function startAuto() {
+  if(autoTimer) return;
+  document.getElementById('btnAuto').textContent = '⏸ 暂停';
+  autoTimer = setInterval(()=>{
+    if(currentRow >= m - 1) stopAuto();
+    else step();
+  }, 800);
+}
+
+function stopAuto() {
+  if(autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  document.getElementById('btnAuto').textContent = '⏵ 自动';
+}
+
+// Init
+loadClassic();
+</script>
+</body>
+</html>

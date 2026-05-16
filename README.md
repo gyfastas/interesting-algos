@@ -36,6 +36,7 @@
 | 028 | [等待模式问题 — 抛硬币与收集问题](./algorithms/waiting-for-patterns/) | 概率论、马尔可夫链、期望值 | ⭐⭐⭐ |
 | 029 | [坏芯片检测问题](./algorithms/chip-testing-problem/) | 组合数学、信息论、决策树 | ⭐⭐⭐ |
 | 030 | [用 Rand7 构造 Rand10](./algorithms/rand7-to-rand10/) | 拒绝采样、均匀分布、概率论 | ⭐⭐⭐ |
+| 031 | [最大矩形](./algorithms/maximal-rectangle/) | 单调栈、动态规划、柱状图 | ⭐⭐⭐⭐ |
 
 ## 目录结构
 
