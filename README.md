@@ -37,6 +37,7 @@
 | 029 | [坏芯片检测问题](./algorithms/chip-testing-problem/) | 组合数学、信息论、决策树 | ⭐⭐⭐ |
 | 030 | [用 Rand7 构造 Rand10](./algorithms/rand7-to-rand10/) | 拒绝采样、均匀分布、概率论 | ⭐⭐⭐ |
 | 031 | [最大矩形](./algorithms/maximal-rectangle/) | 单调栈、动态规划、柱状图 | ⭐⭐⭐⭐ |
+| 032 | [投机解码工程实现](./algorithms/speculative-decoding/) | LLM推理、拒绝采样、工程架构 | ⭐⭐⭐⭐ |
 
 ## 目录结构
 

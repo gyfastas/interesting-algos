@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投机解码 — Speculative Decoding</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#eee; font-family:'Segoe UI',sans-serif;
+    min-height:100vh; overflow-x:hidden;
+  }
+  .container { max-width:1100px; margin:0 auto; padding:20px; }
+  h1 { text-align:center; color:#e94560; margin-bottom:4px; font-size:1.5rem; }
+  .subtitle { text-align:center; color:#889; font-size:0.82rem; margin-bottom:16px; }
+
+  .layout { display:flex; gap:14px; flex-wrap:wrap; }
+  .panel {
+    background:#16213e; border-radius:12px; padding:14px;
+    border:1px solid #0f3460;
+  }
+  .left { flex:1 1 340px; }
+  .right { flex:2 1 520px; }
+
+  .controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  .control-group { display:flex; flex-direction:column; gap:2px; }
+  .control-group label { font-size:0.7rem; color:#aab; }
+  input[type=range] { width:100px; }
+  button {
+    background:#e94560; color:#fff; border:none; padding:7px 14px;
+    border-radius:6px; cursor:pointer; font-size:0.8rem;
+    transition:opacity .2s;
+  }
+  button:hover { opacity:.85; }
+  button.secondary { background:#0f3460; }
+
+  canvas { display:block; width:100%; border-radius:8px; background:#0d1b2a; }
+
+  .stats { display:flex; gap:10px; margin-top:8px; font-size:0.78rem; color:#aab; flex-wrap:wrap; }
+  .stats b { color:#fff; }
+  .stat-box { background:#0d1b2a; padding:6px 10px; border-radius:6px; border:1px solid #1a3a5c; }
+  .highlight { color:#e94560; }
+
+  .legend { display:flex; gap:12px; margin-top:6px; font-size:0.72rem; flex-wrap:wrap; }
+  .legend span { display:flex; align-items:center; gap:4px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+  .info-text { font-size:0.8rem; color:#aab; margin-top:8px; line-height:1.5; }
+
+  h3 { font-size:0.9rem; color:#e94560; margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🚀 投机解码 — Speculative Decoding</h1>
+  <div class="subtitle">Draft 生成候选 → Target batch 验证 → 接受/拒绝/修正</div>
+
+  <div class="layout">
+    <div class="panel left">
+      <div class="controls">
+        <div class="control-group">
+          <label>gamma (候选数)</label>
+          <input id="gammaSlider" type="range" min="1" max="10" value="5">
+          <span id="gammaVal" style="font-size:0.7rem;color:#e94560;">5</span>
+        </div>
+        <div class="control-group">
+          <label>draft 成本比例</label>
+          <input id="costSlider" type="range" min="1" max="50" value="5">
+          <span id="costVal" style="font-size:0.7rem;color:#e94560;">0.05</span>
+        </div>
+        <button id="btnStep">▶ 投机一步</button>
+        <button id="btnBatch">批量 50 步</button>
+      </div>
+      <div class="stats">
+        <div class="stat-box">步数: <b id="statSteps">0</b></div>
+        <div class="stat-box">生成: <b id="statTokens">0</b></div>
+        <div class="stat-box">接受率: <b id="statAcc">--</b></div>
+        <div class="stat-box">加速比: <b id="statSpeedup" class="highlight">--</b></div>
+      </div>
+      <div class="info-text" id="infoText">
+        点击"投机一步"观察单次投机解码过程。
+      </div>
+    </div>
+
+    <div class="panel right">
+      <canvas id="mainCanvas" width="540" height="280"></canvas>
+      <div class="legend">
+        <span><i class="dot" style="background:#4cc9f0;"></i>候选 (draft)</span>
+        <span><i class="dot" style="background:#90be6d;"></i>接受</span>
+        <span><i class="dot" style="background:#e94560;"></i>拒绝+修正</span>
+        <span><i class="dot" style="background:#f9c74f;"></i>额外采样</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px;">
+    <h3>📊 不同 gamma 的加速效果 (draft_cost=0.05)</h3>
+    <canvas id="chartCanvas" width="1060" height="160"></canvas>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// 简化模型模拟
+// =============================================================================
+
+function get_probs(context, V, temp, offset) {
+  const h = hashContext(context);
+  const rng = mulberry32(h);
+  const logits = [];
+  for(let i=0; i<V; i++) logits.push(randn(rng) + offset);
+  // softmax with temp
+  let maxL = -Infinity;
+  for(let v of logits) maxL = Math.max(maxL, v);
+  let sum = 0;
+  const probs = logits.map(v => { const e = Math.exp((v-maxL)/temp); sum += e; return e; });
+  return probs.map(p => p / sum);
+}
+
+function hashContext(ctx) {
+  let h = 0;
+  const key = ctx.slice(-8);
+  for(const x of key) { h = ((h << 5) - h + x) | 0; }
+  return Math.abs(h);
+}
+
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+}
+
+function randn(rng) {
+  // Box-Muller
+  const u1 = rng(), u2 = rng();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function sample(probs) {
+  const r = Math.random();
+  let cum = 0;
+  for(let i=0; i<probs.length; i++) {
+    cum += probs[i];
+    if(r < cum) return i;
+  }
+  return probs.length - 1;
+}
+
+// =============================================================================
+// 投机解码状态
+// =============================================================================
+
+const V = 50;
+let gamma = 5;
+let draftCost = 0.05;
+let prefix = [1, 2, 3];
+let tokens = [];
+let steps = 0;
+let totalDraft = 0, totalTarget = 0, totalAccepted = 0, totalCandidates = 0;
+let lastResult = null; // {candidates, accepted, rejectedAt, extra}
+
+function speculativeStep() {
+  const candidates = [];
+  let ctx = [...prefix, ...tokens];
+  for(let i=0; i<gamma; i++) {
+    const p = get_probs(ctx, V, 1.2, 0.0);
+    candidates.push(sample(p));
+    ctx.push(candidates[i]);
+  }
+
+  const accepted = [];
+  ctx = [...prefix, ...tokens];
+  let rejectedAt = -1;
+
+  for(let i=0; i<candidates.length; i++) {
+    const pt = get_probs(ctx, V, 0.8, 0.5);
+    const pd = get_probs(ctx, V, 1.2, 0.0);
+    const tok = candidates[i];
+    const acceptProb = pd[tok] > 0 ? Math.min(1.0, pt[tok] / pd[tok]) : 1.0;
+
+    if(Math.random() < acceptProb) {
+      accepted.push(tok);
+      ctx.push(tok);
+    } else {
+      // 修正采样
+      const adj = pt.map((p, idx) => Math.max(p - pd[idx], 0));
+      const sum = adj.reduce((a,b) => a+b, 0);
+      if(sum > 1e-10) {
+        const norm = adj.map(x => x / sum);
+        accepted.push(sample(norm));
+      } else {
+        accepted.push(sample(pt));
+      }
+      rejectedAt = i;
+      break;
+    }
+  }
+
+  let extra = null;
+  if(accepted.length === candidates.length) {
+    ctx = [...prefix, ...tokens, ...accepted];
+    const pt = get_probs(ctx, V, 0.8, 0.5);
+    extra = sample(pt);
+    accepted.push(extra);
+  }
+
+  // Update stats
+  tokens.push(...accepted);
+  steps++;
+  totalDraft += gamma;
+  totalTarget += 1;
+  totalAccepted += (rejectedAt === -1 ? gamma : rejectedAt);
+  totalCandidates += gamma;
+
+  lastResult = {candidates, accepted, rejectedAt, extra};
+  updateStats();
+  drawMain();
+}
+
+function batchSteps(n) {
+  for(let i=0; i<n; i++) speculativeStep();
+  drawChart();
+}
+
+function updateStats() {
+  document.getElementById('statSteps').textContent = steps;
+  document.getElementById('statTokens').textContent = tokens.length;
+  const accRate = totalCandidates > 0 ? (totalAccepted / totalCandidates * 100).toFixed(1) + '%' : '--';
+  document.getElementById('statAcc').textContent = accRate;
+
+  const cost = totalDraft * draftCost + totalTarget;
+  const naiveCost = tokens.length;
+  const speedup = cost > 0 ? (naiveCost / cost).toFixed(2) + 'x' : '--';
+  document.getElementById('statSpeedup').textContent = speedup;
+
+  if(lastResult) {
+    const lr = lastResult;
+    let text = `候选: [${lr.candidates.join(',')}] → `;
+    if(lr.rejectedAt === -1) {
+      text += `全部接受 + 额外: ${lr.extra}。成本: ${(gamma*draftCost+1).toFixed(2)}`;
+    } else {
+      text += `前${lr.rejectedAt}个接受, 第${lr.rejectedAt}个拒绝→修正为${lr.accepted[lr.rejectedAt]}`;
+    }
+    document.getElementById('infoText').textContent = text;
+  }
+}
+
+// =============================================================================
+// Main Canvas
+// =============================================================================
+
+const mainCanvas = document.getElementById('mainCanvas');
+const mctx = mainCanvas.getContext('2d');
+
+function drawMain() {
+  const w = mainCanvas.width, h = mainCanvas.height;
+  mctx.clearRect(0, 0, w, h);
+
+  if(!lastResult) {
+    mctx.fillStyle = '#667'; mctx.font = '14px sans-serif'; mctx.textAlign = 'center';
+    mctx.fillText('点击"投机一步"开始', w/2, h/2);
+    return;
+  }
+
+  const lr = lastResult;
+  const cellW = 36, cellH = 40;
+  const startX = 30, startY = 80;
+
+  // Label: Draft candidates
+  mctx.fillStyle = '#889'; mctx.font = '11px sans-serif'; mctx.textAlign = 'left';
+  mctx.fillText('Draft 候选', startX, startY - 15);
+
+  for(let i=0; i<lr.candidates.length; i++) {
+    const x = startX + i * (cellW + 6);
+    const y = startY;
+
+    let color = '#4cc9f0'; // default draft
+    if(i < lr.accepted.length && (lr.rejectedAt === -1 || i < lr.rejectedAt)) {
+      color = '#90be6d'; // accepted
+    } else if(i === lr.rejectedAt) {
+      color = '#e94560'; // rejected
+    }
+
+    mctx.fillStyle = color;
+    mctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+    mctx.strokeStyle = '#fff'; mctx.lineWidth = 1;
+    mctx.strokeRect(x, y, cellW, cellH);
+
+    mctx.fillStyle = '#1a1a2e'; mctx.font = 'bold 13px sans-serif'; mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+    mctx.fillText(lr.candidates[i], x + cellW/2, y + cellH/2);
+
+    mctx.fillStyle = '#fff'; mctx.font = '9px sans-serif';
+    const label = i === lr.rejectedAt ? '拒绝' : (i < lr.accepted.length && i !== lr.rejectedAt ? '接受' : '');
+    mctx.fillText(label, x + cellW/2, y + cellH + 12);
+  }
+
+  // Arrow
+  mctx.strokeStyle = '#889'; mctx.lineWidth = 2;
+  mctx.beginPath();
+  mctx.moveTo(startX + lr.candidates.length * (cellW+6) + 10, startY + cellH/2);
+  mctx.lineTo(startX + lr.candidates.length * (cellW+6) + 40, startY + cellH/2);
+  mctx.stroke();
+  mctx.fillText('Target batch verify', startX + lr.candidates.length * (cellW+6) + 45, startY + cellH/2 - 8);
+
+  // Output tokens
+  const outX = startX + lr.candidates.length * (cellW+6) + 130;
+  mctx.fillStyle = '#889'; mctx.font = '11px sans-serif'; mctx.textAlign = 'left';
+  mctx.fillText('输出', outX, startY - 15);
+
+  for(let i=0; i<lr.accepted.length; i++) {
+    const x = outX + i * (cellW + 6);
+    const y = startY;
+    const isExtra = (lr.rejectedAt === -1 && i === lr.accepted.length - 1);
+
+    mctx.fillStyle = isExtra ? '#f9c74f' : '#90be6d';
+    mctx.fillRect(x + 1, y + 1, cellW - 2, cellH - 2);
+    mctx.strokeStyle = '#fff'; mctx.lineWidth = 1;
+    mctx.strokeRect(x, y, cellW, cellH);
+
+    mctx.fillStyle = '#1a1a2e'; mctx.font = 'bold 13px sans-serif'; mctx.textAlign = 'center'; mctx.textBaseline = 'middle';
+    mctx.fillText(lr.accepted[i], x + cellW/2, y + cellH/2);
+
+    if(isExtra) {
+      mctx.fillStyle = '#f9c74f'; mctx.font = '9px sans-serif';
+      mctx.fillText('额外', x + cellW/2, y + cellH + 12);
+    }
+  }
+
+  // Cost info
+  mctx.fillStyle = '#aab'; mctx.font = '12px sans-serif'; mctx.textAlign = 'left';
+  const cost = (gamma * draftCost + 1).toFixed(2);
+  mctx.fillText(`本轮成本: ${cost} (draft=${gamma}×${draftCost} + target=1)`, startX, h - 20);
+}
+
+// =============================================================================
+// Chart Canvas
+// =============================================================================
+
+const chartCanvas = document.getElementById('chartCanvas');
+const cctx = chartCanvas.getContext('2d');
+
+function drawChart() {
+  const w = chartCanvas.width, h = chartCanvas.height;
+  cctx.clearRect(0, 0, w, h);
+
+  const gammas = [1, 2, 3, 4, 5, 6, 8, 10];
+  const results = gammas.map(g => simulateGamma(g, 0.05));
+
+  const pad = {l:40, t:15, r:15, b:25};
+  const cw = w - pad.l - pad.r, ch = h - pad.t - pad.b;
+
+  // Grid
+  cctx.strokeStyle = '#1a3a5c'; cctx.lineWidth = 1;
+  for(let i=0; i<=4; i++) {
+    const y = pad.t + ch*(i/4);
+    cctx.beginPath(); cctx.moveTo(pad.l, y); cctx.lineTo(pad.l+cw, y); cctx.stroke();
+  }
+
+  // Bars: speedup
+  const maxSpeedup = Math.max(...results.map(r => r.speedup), 4);
+  const barW = cw / gammas.length - 10;
+
+  for(let i=0; i<gammas.length; i++) {
+    const x = pad.l + i * (cw/gammas.length) + 5;
+    const bh = (results[i].speedup / maxSpeedup) * ch;
+    const y = pad.t + ch - bh;
+
+    cctx.fillStyle = gammas[i] === gamma ? '#e94560' : '#4cc9f0';
+    cctx.fillRect(x, y, barW, bh);
+
+    cctx.fillStyle = '#fff'; cctx.font = 'bold 10px sans-serif'; cctx.textAlign = 'center';
+    cctx.fillText(results[i].speedup.toFixed(1)+'x', x + barW/2, y - 6);
+
+    cctx.fillStyle = '#889'; cctx.font = '9px sans-serif';
+    cctx.fillText('γ='+gammas[i], x + barW/2, pad.t + ch + 12);
+  }
+
+  // Y axis
+  cctx.fillStyle = '#889'; cctx.font = '9px sans-serif'; cctx.textAlign = 'right';
+  for(let i=0; i<=4; i++) {
+    const v = maxSpeedup * (1 - i/4);
+    cctx.fillText(v.toFixed(1), pad.l - 4, pad.t + ch*(i/4) + 3);
+  }
+}
+
+function simulateGamma(g, costRatio) {
+  let draftF = 0, targetF = 0, accepted = 0, candidates = 0;
+  let ctx = [1, 2, 3];
+  let generated = 0;
+  let steps = 0;
+
+  while(generated < 200 && steps < 100) {
+    // Generate candidates
+    const cands = [];
+    let c = [...ctx];
+    for(let i=0; i<g; i++) {
+      cands.push(sample(get_probs(c, V, 1.2, 0.0)));
+      c.push(cands[i]);
+    }
+    draftF += g;
+    targetF += 1;
+    candidates += g;
+
+    // Verify
+    let acc = 0;
+    c = [...ctx];
+    for(let i=0; i<cands.length; i++) {
+      const pt = get_probs(c, V, 0.8, 0.5);
+      const pd = get_probs(c, V, 1.2, 0.0);
+      const prob = pd[cands[i]] > 0 ? Math.min(1, pt[cands[i]]/pd[cands[i]]) : 1;
+      if(Math.random() < prob) {
+        acc++; c.push(cands[i]);
+      } else {
+        break;
+      }
+    }
+    accepted += acc;
+
+    if(acc === cands.length) {
+      generated += acc + 1;
+    } else {
+      generated += acc + 1;
+    }
+    ctx = ctx.concat(cands.slice(0, acc));
+    if(acc === cands.length) {
+      ctx.push(sample(get_probs(ctx, V, 0.8, 0.5)));
+    }
+    steps++;
+  }
+
+  const cost = draftF * costRatio + targetF;
+  const speedup = generated / cost;
+  return {speedup, accepted: accepted/candidates};
+}
+
+// =============================================================================
+// Events
+// =============================================================================
+
+document.getElementById('gammaSlider').oninput = function() {
+  gamma = parseInt(this.value);
+  document.getElementById('gammaVal').textContent = gamma;
+};
+document.getElementById('costSlider').oninput = function() {
+  draftCost = parseInt(this.value) / 100;
+  document.getElementById('costVal').textContent = draftCost.toFixed(2);
+};
+document.getElementById('btnStep').onclick = speculativeStep;
+document.getElementById('btnBatch').onclick = () => batchSteps(50);
+
+// Init
+drawMain();
+drawChart();
+</script>
+</body>
+</html>
