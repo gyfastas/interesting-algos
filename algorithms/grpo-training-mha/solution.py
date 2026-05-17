@@ -283,10 +283,11 @@ class GRPOTrainer:
     def __init__(self, policy, ref_model, group_size=8, beta=0.01,
                  epsilon=0.2, lr=0.01, grad_clip=1.0, kl_mode='sample'):
         """
-        kl_mode: 'sample' | 'forward' | 'reverse'
+        kl_mode: 'sample' | 'forward' | 'reverse' | 'k3'
           - sample: 单点估计 β*(log π(y) - log π_ref(y))，π_ref 不影响梯度方向
           - forward: Forward KL(π||π_ref) = Σ π(v)[log π(v) - log π_ref(v)]
           - reverse: Reverse KL(π_ref||π) = Σ π_ref(v)[log π_ref(v) - log π(v)]
+          - k3: K3 Estimator = log(π/π_ref) - 1 + π_ref/π，无偏单点估计
         """
         self.policy = policy
         self.ref_model = ref_model
@@ -444,6 +445,15 @@ class GRPOTrainer:
                     # 梯度: β * (π(j) - π_ref(j))
                     grad_kl = self.beta * (sm - sm_ref)
 
+                elif self.kl_mode == 'k3':
+                    # K3 Estimator: log(π/π_ref) - 1 + π_ref/π
+                    # E_{y~π}[k3(y)] = KL(π || π_ref)，无偏单点估计
+                    ratio_ref = np.exp(lpr - lp)  # π_ref(y) / π(y)
+                    k3 = (lp - lpr) - 1 + ratio_ref
+                    loss_kl = self.beta * k3
+                    # 梯度: β * (1 - π_ref/π) * (one_hot - softmax)
+                    grad_kl = self.beta * (1 - ratio_ref) * (oh - sm)
+
                 else:
                     raise ValueError(f"Unknown kl_mode: {self.kl_mode}")
 
@@ -465,9 +475,10 @@ class GRPOTrainer:
                 #   else: grad_pg = -adv * ratio * (one_hot - softmax)
                 #
                 # KL 模式决定 grad_kl：
-                #   sample : β*(one_hot - softmax)      — π_ref 不进入梯度
-                #   forward: β*π*(log π - log π_ref - KL) — 完整 Forward KL
-                #   reverse: β*(π - π_ref)               — 完整 Reverse KL
+                #   sample : β*(one_hot - softmax)          — π_ref 不进入梯度
+                #   forward: β*π*(log π - log π_ref - KL)   — 完整 Forward KL
+                #   reverse: β*(π - π_ref)                  — 完整 Reverse KL
+                #   k3     : β*(1 - π_ref/π)*(one_hot - sm) — K3 无偏估计
                 # ==========================================
 
                 clip_active = (adv > 0 and ratio > 1 + self.epsilon) or \
@@ -727,6 +738,9 @@ def verify_grpo_gradients():
     logsm_old_vec = logits_old[0, pos] - mo - np.log(np.sum(np.exp(logits_old[0, pos] - mo)))
     lpo = logsm_old_vec[target]
 
+    # Precompute ref log P at target (for k3 and sample)
+    lpr = logsm_ref_vec[target]
+
     def make_loss_fn(kl_mode):
         """返回给定 kl_mode 的 loss 函数。"""
         def loss_fn(logits_pi_pos):
@@ -740,7 +754,6 @@ def verify_grpo_gradients():
             loss_pg = -min(ratio * adv, ratio_clip * adv)
 
             if kl_mode == 'sample':
-                lpr = logsm_ref_vec[target]
                 loss_kl = beta * (lp - lpr)
             elif kl_mode == 'forward':
                 kl = np.sum(sm_pi_vec * (logsm_pi_vec - logsm_ref_vec))
@@ -748,6 +761,10 @@ def verify_grpo_gradients():
             elif kl_mode == 'reverse':
                 kl = np.sum(sm_ref_vec * (logsm_ref_vec - logsm_pi_vec))
                 loss_kl = beta * kl
+            elif kl_mode == 'k3':
+                ratio_ref = np.exp(lpr - lp)
+                k3 = (lp - lpr) - 1 + ratio_ref
+                loss_kl = beta * k3
             else:
                 raise ValueError(kl_mode)
             return loss_pg + loss_kl
@@ -778,6 +795,9 @@ def verify_grpo_gradients():
             grad_kl = beta * sm * (logsm_pi_vec - logsm_ref_vec - kl)
         elif kl_mode == 'reverse':
             grad_kl = beta * (sm - sm_ref_vec)
+        elif kl_mode == 'k3':
+            ratio_ref = np.exp(lpr - lp)
+            grad_kl = beta * (1 - ratio_ref) * (oh - sm)
         else:
             raise ValueError(kl_mode)
 
@@ -785,7 +805,7 @@ def verify_grpo_gradients():
 
     # 数值梯度
     eps = 1e-5
-    for kl_mode in ['sample', 'forward', 'reverse']:
+    for kl_mode in ['sample', 'forward', 'reverse', 'k3']:
         loss_fn = make_loss_fn(kl_mode)
         grad_ana = analytical_grad(kl_mode)
 
@@ -817,7 +837,7 @@ def demo():
     print("三种 KL 模式训练对比")
     print("=" * 70)
 
-    for kl_mode in ['sample', 'forward', 'reverse']:
+    for kl_mode in ['sample', 'forward', 'reverse', 'k3']:
         print(f"\n--- KL mode: {kl_mode} ---")
         train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
                    prompt_len=1, resp_len=1,

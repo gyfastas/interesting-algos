@@ -147,15 +147,41 @@ $$\nabla_j \text{KL} = \pi_\theta(j) - \pi_{ref}(j)$$
 - 计算 O(V)
 - 目标：让 π_θ 的分布「不超出」π_ref 的支持范围
 
+### ④ K3 Estimator — 无偏单点估计
+
+$$
+k_3(y) = \log \frac{\pi_\theta(y)}{\pi_{ref}(y)} - 1 + \frac{\pi_{ref}(y)}{\pi_\theta(y)}$$
+
+**性质：**
+
+$$\mathbb{E}_{y \sim \pi_\theta}\left[k_3(y)\right] = \text{KL}(\pi_\theta \| \pi_{ref})$$
+
+证明：
+- $\mathbb{E}[\log \frac{\pi}{\pi_{ref}}] = \text{KL}$（KL 定义）
+- $\mathbb{E}[-1] = -1$
+- $\mathbb{E}[\frac{\pi_{ref}}{\pi}] = \sum_y \pi(y) \cdot \frac{\pi_{ref}(y)}{\pi(y)} = \sum_y \pi_{ref}(y) = 1$
+
+三项相加 = KL − 1 + 1 = KL ✓
+
+**梯度：**
+
+$$\nabla_j k_3 = \left(1 - \frac{\pi_{ref}(y)}{\pi_\theta(y)}\right) \cdot (\mathbf{1}_y - \pi_\theta)_j$$
+
+**特点：**
+- 单点计算 O(1)，但**是无偏估计**
+- π_ref 通过 $\pi_{ref}/\pi$ 显式影响梯度
+- 当 π = π_ref 时，系数 = 0，梯度 = 0 ✓
+
 ### 对比总结
 
-| 模式 | Loss 形式 | 梯度 | π_ref 是否影响梯度 | 计算复杂度 | 工业界使用 |
-|------|-----------|------|-------------------|-----------|-----------|
-| **sample** | β·[log π(y) − log π_ref(y)] | β·(1_y − π) | ❌ 否 | O(1) | ⭐⭐⭐ 最常用 |
-| **forward** | β·Σ π(v)[log π(v) − log π_ref(v)] | β·π·[log π − log π_ref − KL] | ✅ 是 | O(V) | ⭐⭐ 较严谨 |
-| **reverse** | β·Σ π_ref(v)[log π_ref(v) − log π(v)] | β·(π − π_ref) | ✅ 是 | O(V) | ⭐⭐ 形式简洁 |
+| 模式 | Loss 形式 | 梯度 | π_ref 是否影响梯度 | 是否无偏 | 计算复杂度 |
+|------|-----------|------|-------------------|---------|-----------|
+| **sample** | β·[log π(y) − log π_ref(y)] | β·(1_y − π) | ❌ 否 | ❌ 否 | O(1) |
+| **forward** | β·Σ π(v)[log π(v) − log π_ref(v)] | β·π·[log π − log π_ref − KL] | ✅ 是 | ✅ 是 | O(V) |
+| **reverse** | β·Σ π_ref(v)[log π_ref(v) − log π(v)] | β·(π − π_ref) | ✅ 是 | ✅ 是 | O(V) |
+| **k3** | β·[log(π/π_ref) − 1 + π_ref/π] | β·(1 − π_ref/π)·(1_y − π) | ✅ 是 | ✅ 是 | O(1) |
 
-> **面试考点**：单点估计的 KL 里 π_ref 实际上只影响 loss 数值，不影响梯度方向。如果要让 π_ref 真正约束策略，需要用 Forward KL 或 Reverse KL。
+> **面试考点**：单点估计的 KL 里 π_ref 实际上只影响 loss 数值，不影响梯度方向。K3 Estimator 是罕见的「单点计算 + 无偏 + π_ref 影响梯度」三者兼得的方案。
 
 ---
 
@@ -202,6 +228,14 @@ class GRPOTrainer:
                 kl = sum(sm_ref[v] * (log(sm_ref[v]) - log(sm[v])) for v in range(V))
                 loss_kl = beta * kl
                 grad_kl = beta * (sm - sm_ref)
+
+            elif kl_mode == 'k3':
+                # K3 Estimator — 单点无偏估计
+                ratio_ref = pi_ref(y) / pi(y)
+                k3 = log(pi(y) / pi_ref(y)) - 1 + ratio_ref
+                loss_kl = beta * k3
+                # 梯度: (1 - pi_ref/pi) * (one_hot - softmax)
+                grad_kl = beta * (1 - ratio_ref) * (oh - sm)
 
             grad_logits = grad_pg + grad_kl
 
@@ -252,13 +286,14 @@ epoch 599: loss=0.011541, mean_reward=0.88, acc=0.88
 - **平均奖励**：从 0.11（随机）提升到 **0.88**
 - **准确率**：从 12%（随机）提升到 **88%**
 
-### 三种 KL 模式对比（300 epochs）
+### 四种 KL 模式对比（300 epochs）
 
 | KL 模式 | 最终 Reward | 最终 Acc | 特点 |
 |---------|------------|---------|------|
 | **sample** | 0.75 | 75% | 快速收敛，π_ref 不约束梯度方向 |
 | **forward** | 0.73 | 75% | 最严谨，完整 Forward KL |
 | **reverse** | 0.78 | **100%** | 形式简洁，意外表现最好 |
+| **k3** | 0.75 | 75% | 单点无偏估计，π_ref 影响梯度 |
 
 ### 关键超参数
 
@@ -293,6 +328,7 @@ epoch 599: loss=0.011541, mean_reward=0.88, acc=0.88
 | KL (sample) | $\beta \cdot (\mathbf{1}_y - \text{softmax})$，π_ref 不影响梯度方向 |
 | KL (forward) | $\beta \cdot \pi \cdot [\log \pi - \log \pi_{ref} - \text{KL}]$，完整严谨 |
 | KL (reverse) | $\beta \cdot (\pi - \pi_{ref})$，形式最简洁 |
+| KL (k3) | $\beta \cdot (1 - \pi_{ref}/\pi) \cdot (\mathbf{1}_y - \pi)$，单点无偏 |
 | 工程注意 | 每个 response 单独 forward/backward，梯度累加后统一更新 |
 
 **一句话总结**：GRPO = Group Sampling + Relative Advantage + PPO-Clip + KL —— 不需要 Value Model，用组内竞争代替全局评价，把高奖励回答往上拉，低奖励回答往下压。KL 的实现方式决定了 π_ref 对策略的约束强度。
