@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Word Ladder — 单词接龙 BFS 可视化</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --accent: #e94560;
+    --accent2: #0f3460;
+    --text: #eaeaea;
+    --text-dim: #a0a0a0;
+    --node-front: #e94560;
+    --node-visited: #f39c12;
+    --node-end: #2ecc71;
+    --edge: #0f3460;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { text-align: center; padding: 20px; font-size: 1.5rem; }
+  .container { display: flex; flex: 1; gap: 20px; padding: 0 20px 20px; }
+  .panel {
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 20px;
+    min-width: 300px;
+  }
+  .panel h2 { font-size: 1.1rem; margin-bottom: 15px; color: var(--accent); }
+  .input-group { margin-bottom: 15px; }
+  .input-group label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 5px; }
+  .input-group input, .input-group textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent2);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+  .input-group textarea { min-height: 80px; resize: vertical; font-family: monospace; }
+  .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+  button {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.85; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary { background: var(--accent2); color: var(--text); }
+  .btn-group button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .stats { margin-top: 15px; font-size: 0.85rem; }
+  .stats .stat-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--accent2); }
+  .stats .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-dim); }
+  .stat-value { color: var(--accent); font-weight: 600; }
+  .path-display {
+    margin-top: 15px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 0.9rem;
+    min-height: 40px;
+    word-break: break-all;
+  }
+  .path-arrow { color: var(--accent); margin: 0 4px; }
+
+  .canvas-area { flex: 1; background: var(--panel); border-radius: 12px; position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .legend {
+    position: absolute;
+    bottom: 15px;
+    left: 15px;
+    display: flex;
+    gap: 20px;
+    font-size: 0.8rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  .layer-info {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background: rgba(0,0,0,0.5);
+    padding: 10px 15px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+  }
+  .layer-info span { color: var(--accent); font-weight: bold; font-size: 1.2rem; }
+
+  .speed-control { margin-top: 15px; }
+  .speed-control label { font-size: 0.8rem; color: var(--text-dim); }
+  .speed-control input { width: 100%; margin-top: 5px; }
+</style>
+</head>
+<body>
+<h1>🪜 Word Ladder — 单词接龙 BFS 可视化</h1>
+<div class="container">
+  <div class="panel">
+    <h2>输入</h2>
+    <div class="input-group">
+      <label>起始单词 (beginWord)</label>
+      <input type="text" id="beginWord" value="hit" maxlength="10">
+    </div>
+    <div class="input-group">
+      <label>目标单词 (endWord)</label>
+      <input type="text" id="endWord" value="cog" maxlength="10">
+    </div>
+    <div class="input-group">
+      <label>单词列表 (每行一个)</label>
+      <textarea id="wordList">hot
+dot
+dog
+lot
+log
+cog</textarea>
+    </div>
+    <div class="btn-group">
+      <button class="btn-primary" id="btnStart" onclick="startAnimation()">▶ 开始 BFS</button>
+      <button class="btn-secondary" id="btnReset" onclick="reset()">⟲ 重置</button>
+    </div>
+    <div class="speed-control">
+      <label>动画速度</label>
+      <input type="range" id="speed" min="1" max="10" value="5">
+    </div>
+
+    <h2 style="margin-top:20px">统计</h2>
+    <div class="stats">
+      <div class="stat-row"><span class="stat-label">当前层数</span><span class="stat-value" id="statLayer">-</span></div>
+      <div class="stat-row"><span class="stat-label">已访问节点</span><span class="stat-value" id="statVisited">-</span></div>
+      <div class="stat-row"><span class="stat-label">队列大小</span><span class="stat-value" id="statQueue">-</span></div>
+      <div class="stat-row"><span class="stat-label">最短步数</span><span class="stat-value" id="statAnswer">-</span></div>
+    </div>
+    <div class="path-display" id="pathDisplay">点击「开始 BFS」运行动画</div>
+  </div>
+
+  <div class="canvas-area">
+    <canvas id="canvas"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-front)"></div> 起点/当前层</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-visited)"></div> 已访问</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--node-end)"></div> 终点</div>
+    </div>
+    <div class="layer-info">第 <span id="layerNum">0</span> 层</div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let animationId = null;
+let animating = false;
+let nodes = [];
+let edges = [];
+let frameQueue = [];
+let currentFrame = 0;
+let speed = 5;
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  draw();
+}
+window.addEventListener('resize', resizeCanvas);
+
+function parseInput() {
+  const begin = document.getElementById('beginWord').value.trim().toLowerCase();
+  const end = document.getElementById('endWord').value.trim().toLowerCase();
+  const raw = document.getElementById('wordList').value.trim().toLowerCase().split('\n');
+  const words = raw.map(w => w.trim()).filter(w => w && w.length === begin.length);
+  const wordSet = new Set([begin, end, ...words]);
+  return { begin, end, wordList: [...wordSet] };
+}
+
+function getNeighbors(word, wordSet) {
+  const neighbors = [];
+  for (let i = 0; i < word.length; i++) {
+    for (let c = 97; c <= 122; c++) {
+      const ch = String.fromCharCode(c);
+      if (ch === word[i]) continue;
+      const next = word.slice(0, i) + ch + word.slice(i + 1);
+      if (wordSet.has(next) && next !== word) neighbors.push(next);
+    }
+  }
+  return neighbors;
+}
+
+function buildGraph(begin, end, wordList) {
+  const wordSet = new Set(wordList);
+  const allWords = [begin, ...wordList.filter(w => w !== begin)];
+
+  // Force-directed layout
+  const nodeMap = {};
+  nodes = allWords.map((word, i) => {
+    const angle = (i / allWords.length) * Math.PI * 2;
+    const r = 150 + Math.random() * 50;
+    const n = {
+      id: word,
+      x: canvas.width / 2 + Math.cos(angle) * r,
+      y: canvas.height / 2 + Math.sin(angle) * r,
+      vx: 0, vy: 0,
+      state: word === begin ? 'start' : (word === end ? 'end' : 'unvisited'),
+      layer: word === begin ? 1 : -1,
+      path: word === begin ? [begin] : null
+    };
+    nodeMap[word] = n;
+    return n;
+  });
+
+  edges = [];
+  for (const word of allWords) {
+    const neigh = getNeighbors(word, wordSet);
+    for (const n of neigh) {
+      if (nodeMap[n] && !edges.find(e =>
+        (e.from === word && e.to === n) || (e.from === n && e.to === word))) {
+        edges.push({ from: word, to: n, active: false });
+      }
+    }
+  }
+
+  // Run force simulation
+  for (let step = 0; step < 300; step++) {
+    // Repulsion
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[j].x - nodes[i].x;
+        const dy = nodes[j].y - nodes[i].y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 0.1;
+        const f = 2000 / (dist * dist);
+        const fx = (dx / dist) * f;
+        const fy = (dy / dist) * f;
+        nodes[i].vx -= fx; nodes[i].vy -= fy;
+        nodes[j].vx += fx; nodes[j].vy += fy;
+      }
+    }
+    // Attraction along edges
+    for (const e of edges) {
+      const a = nodeMap[e.from], b = nodeMap[e.to];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) + 0.1;
+      const f = (dist - 100) * 0.01;
+      const fx = (dx / dist) * f;
+      const fy = (dy / dist) * f;
+      a.vx += fx; a.vy += fy;
+      b.vx -= fx; b.vy -= fy;
+    }
+    // Center gravity
+    for (const n of nodes) {
+      n.vx += (canvas.width / 2 - n.x) * 0.001;
+      n.vy += (canvas.height / 2 - n.y) * 0.001;
+      // Dampen
+      n.vx *= 0.5;
+      n.vy *= 0.5;
+      n.x += n.vx;
+      n.y += n.vy;
+    }
+  }
+
+  return nodeMap;
+}
+
+function runBFS(begin, end, wordList) {
+  const wordSet = new Set(wordList);
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+
+  const queue = [{ word: begin, steps: 1, path: [begin] }];
+  const visited = new Set([begin]);
+  const frames = [];
+
+  frames.push({
+    type: 'init',
+    visited: [begin],
+    layer: 1,
+    queueSize: 1,
+    path: [begin],
+    edges: []
+  });
+
+  while (queue.length > 0) {
+    const layerSize = queue.length;
+    const currentLayer = queue[0].steps;
+    const layerEdges = [];
+    const layerVisited = [];
+
+    for (let i = 0; i < layerSize; i++) {
+      const { word, steps, path } = queue.shift();
+
+      if (word === end) {
+        frames.push({
+          type: 'found',
+          word,
+          steps,
+          path: [...path],
+          layer: currentLayer,
+          queueSize: queue.length,
+          edges: layerEdges
+        });
+        return frames;
+      }
+
+      for (let j = 0; j < word.length; j++) {
+        for (let c = 97; c <= 122; c++) {
+          const ch = String.fromCharCode(c);
+          if (ch === word[j]) continue;
+          const next = word.slice(0, j) + ch + word.slice(j + 1);
+
+          if (wordSet.has(next) && !visited.has(next)) {
+            visited.add(next);
+            queue.push({ word: next, steps: steps + 1, path: [...path, next] });
+            layerVisited.push(next);
+            layerEdges.push({ from: word, to: next });
+          }
+        }
+      }
+    }
+
+    frames.push({
+      type: 'layer',
+      layer: currentLayer + 1,
+      visited: layerVisited,
+      queueSize: queue.length,
+      path: queue.length > 0 ? queue[0].path : [],
+      edges: layerEdges
+    });
+  }
+
+  frames.push({
+    type: 'fail',
+    layer: -1,
+    visited: [],
+    queueSize: 0,
+    path: [],
+    edges: []
+  });
+  return frames;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+
+  // Draw edges
+  for (const e of edges) {
+    const a = nodeMap[e.from], b = nodeMap[e.to];
+    if (!a || !b) continue;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = e.active ? 'var(--accent)' : 'var(--edge)';
+    ctx.lineWidth = e.active ? 2 : 0.5;
+    ctx.globalAlpha = e.active ? 0.8 : 0.15;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Draw nodes
+  for (const n of nodes) {
+    let color = 'var(--text-dim)';
+    let radius = 8;
+    if (n.state === 'start') { color = 'var(--node-front)'; radius = 12; }
+    else if (n.state === 'end') { color = 'var(--node-end)'; radius = 12; }
+    else if (n.state === 'visited') { color = 'var(--node-visited)'; radius = 10; }
+    else if (n.state === 'current') { color = 'var(--accent)'; radius = 12; }
+
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Glow for active nodes
+    if (n.state !== 'unvisited') {
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, radius + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.3;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    // Label
+    ctx.fillStyle = 'var(--text)';
+    ctx.font = n.state !== 'unvisited' ? 'bold 12px sans-serif' : '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(n.id, n.x, n.y - radius - 10);
+  }
+}
+
+function applyFrame(frame) {
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+
+  if (frame.type === 'init') {
+    nodes.forEach(n => {
+      if (n.id === document.getElementById('beginWord').value.trim().toLowerCase()) {
+        n.state = 'start';
+      } else if (n.id === document.getElementById('endWord').value.trim().toLowerCase()) {
+        n.state = 'end';
+      } else {
+        n.state = 'unvisited';
+      }
+    });
+  }
+
+  for (const w of frame.visited) {
+    if (nodeMap[w]) {
+      nodeMap[w].state = 'visited';
+      nodeMap[w].layer = frame.layer;
+    }
+  }
+
+  for (const e of frame.edges) {
+    const edge = edges.find(ed =>
+      (ed.from === e.from && ed.to === e.to) || (ed.from === e.to && ed.to === e.from));
+    if (edge) edge.active = true;
+  }
+
+  document.getElementById('statLayer').textContent = frame.layer;
+  document.getElementById('statVisited').textContent = nodes.filter(n => n.state !== 'unvisited').length;
+  document.getElementById('statQueue').textContent = frame.queueSize;
+  document.getElementById('layerNum').textContent = frame.layer;
+
+  if (frame.type === 'found') {
+    document.getElementById('statAnswer').textContent = frame.steps;
+    const pathHTML = frame.path.map((w, i) =>
+      i === 0 ? w : `<span class="path-arrow">→</span>${w}`
+    ).join('');
+    document.getElementById('pathDisplay').innerHTML = `✓ 找到路径！<br>${pathHTML}`;
+    document.getElementById('pathDisplay').style.color = 'var(--node-end)';
+    // Highlight path
+    for (let i = 0; i < frame.path.length - 1; i++) {
+      const a = frame.path[i], b = frame.path[i+1];
+      const edge = edges.find(e =>
+        (e.from === a && e.to === b) || (e.from === b && e.to === a));
+      if (edge) { edge.active = true; edge.onPath = true; }
+    }
+    for (const w of frame.path) {
+      if (nodeMap[w]) nodeMap[w].state = 'current';
+    }
+  } else if (frame.type === 'fail') {
+    document.getElementById('statAnswer').textContent = '无法到达';
+    document.getElementById('pathDisplay').textContent = '✗ 无法到达目标单词';
+    document.getElementById('pathDisplay').style.color = 'var(--accent)';
+  } else {
+    document.getElementById('statAnswer').textContent = '-';
+    const pathHTML = frame.path.map((w, i) =>
+      i === 0 ? w : `<span class="path-arrow">→</span>${w}`
+    ).join('');
+    document.getElementById('pathDisplay').innerHTML = `探索中…<br>${pathHTML}`;
+    document.getElementById('pathDisplay').style.color = 'var(--text)';
+  }
+
+  draw();
+}
+
+function animate() {
+  if (!animating || currentFrame >= frameQueue.length) {
+    animating = false;
+    document.getElementById('btnStart').disabled = false;
+    return;
+  }
+
+  applyFrame(frameQueue[currentFrame]);
+  currentFrame++;
+
+  const delay = 1100 - speed * 100;
+  setTimeout(() => {
+    if (animating) animationId = requestAnimationFrame(animate);
+  }, delay);
+}
+
+function startAnimation() {
+  if (animating) return;
+
+  const { begin, end, wordList } = parseInput();
+  if (!begin || !end || wordList.length < 2) {
+    alert('请输入有效的起始单词、目标单词和单词列表');
+    return;
+  }
+  if (begin.length !== end.length) {
+    alert('起始单词和目标单词长度必须相同');
+    return;
+  }
+
+  speed = parseInt(document.getElementById('speed').value);
+  document.getElementById('btnStart').disabled = true;
+
+  resizeCanvas();
+  buildGraph(begin, end, wordList);
+  frameQueue = runBFS(begin, end, wordList);
+  currentFrame = 0;
+  animating = true;
+  animate();
+}
+
+function reset() {
+  animating = false;
+  if (animationId) cancelAnimationFrame(animationId);
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('statLayer').textContent = '-';
+  document.getElementById('statVisited').textContent = '-';
+  document.getElementById('statQueue').textContent = '-';
+  document.getElementById('statAnswer').textContent = '-';
+  document.getElementById('layerNum').textContent = '0';
+  document.getElementById('pathDisplay').textContent = '点击「开始 BFS」运行动画';
+  document.getElementById('pathDisplay').style.color = 'var(--text)';
+  nodes = [];
+  edges = [];
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+resizeCanvas();
+</script>
+</body>
+</html>
