@@ -98,6 +98,67 @@ $$\frac{d\mathcal{L}}{d(\text{logits})} = -A \cdot \rho \cdot (\mathbf{1} - \tex
 
 ---
 
+## 三种 KL 实现对比（核心考点）
+
+GRPO 中 KL penalty 的实现有三种常见方式，面试中经常被问到：
+
+### ① 单点估计 (Sample-based) — 最常用
+
+$$
+\mathcal{L}_{KL} = \beta \cdot \left[\log \pi_\theta(y|x) - \log \pi_{ref}(y|x)\right]$$
+
+**梯度：**
+
+$$\nabla \mathcal{L}_{KL} = \beta \cdot (\mathbf{1}_y - \pi_\theta)$$
+
+**特点：**
+- 只对**采样到的 y** 计算梯度
+- **π_ref 不进入梯度方向**（被视为常数）
+- 计算 O(1)，工程上最常用（OpenAI PPO、早期 TRL）
+- 严格来说是 KL 的单点蒙特卡洛估计，而非真正 KL
+
+### ② Forward KL — 理论最严谨
+
+$$
+\text{KL}(\pi_\theta \| \pi_{ref}) = \sum_v \pi_\theta(v) \left[\log \pi_\theta(v) - \log \pi_{ref}(v)\right]$$
+
+**梯度：**
+
+$$\nabla_j \text{KL} = \pi_\theta(j) \cdot \left[\log \pi_\theta(j) - \log \pi_{ref}(j) - \text{KL}\right]$$
+
+**特点：**
+- 对所有 vocab token 求和
+- **π_ref 显式影响梯度**：π_ref(j) 越大，越抑制 π_θ(j)
+- 计算 O(V)，LLM 中较贵
+- 目标：让 π_θ 的分布「覆盖」π_ref 的分布
+
+### ③ Reverse KL — 形式最简洁
+
+$$
+\text{KL}(\pi_{ref} \| \pi_\theta) = \sum_v \pi_{ref}(v) \left[\log \pi_{ref}(v) - \log \pi_\theta(v)\right]$$
+
+**梯度：**
+
+$$\nabla_j \text{KL} = \pi_\theta(j) - \pi_{ref}(j)$$
+
+**特点：**
+- 梯度形式极简：`sm - sm_ref`
+- **π_ref 显式影响梯度方向**
+- 计算 O(V)
+- 目标：让 π_θ 的分布「不超出」π_ref 的支持范围
+
+### 对比总结
+
+| 模式 | Loss 形式 | 梯度 | π_ref 是否影响梯度 | 计算复杂度 | 工业界使用 |
+|------|-----------|------|-------------------|-----------|-----------|
+| **sample** | β·[log π(y) − log π_ref(y)] | β·(1_y − π) | ❌ 否 | O(1) | ⭐⭐⭐ 最常用 |
+| **forward** | β·Σ π(v)[log π(v) − log π_ref(v)] | β·π·[log π − log π_ref − KL] | ✅ 是 | O(V) | ⭐⭐ 较严谨 |
+| **reverse** | β·Σ π_ref(v)[log π_ref(v) − log π(v)] | β·(π − π_ref) | ✅ 是 | O(V) | ⭐⭐ 形式简洁 |
+
+> **面试考点**：单点估计的 KL 里 π_ref 实际上只影响 loss 数值，不影响梯度方向。如果要让 π_ref 真正约束策略，需要用 Forward KL 或 Reverse KL。
+
+---
+
 ## 代码实现
 
 ### GRPO 核心
@@ -120,21 +181,32 @@ class GRPOTrainer:
 
             # PPO-clip
             loss_pg = -min(ratio * adv, ratio_clip * adv)
-            # KL penalty
-            loss_kl = beta * (lp - lpr)
 
-            # 梯度
+            # === 三种 KL 实现 ===
             sm = softmax(logits_pi)
-            oh = one_hot(target)
-            clip_active = (adv > 0 and ratio > 1 + eps) or \
-                          (adv < 0 and ratio < 1 - eps)
-            grad_pg = 0 if clip_active else -adv * ratio * (oh - sm)
-            grad_kl = beta * (oh - sm)
+            sm_ref = softmax(logits_ref)
+
+            if kl_mode == 'sample':
+                # 单点估计 — π_ref 不影响梯度
+                loss_kl = beta * (lp - lpr)
+                grad_kl = beta * (oh - sm)
+
+            elif kl_mode == 'forward':
+                # Forward KL — 完整求和
+                kl = sum(sm[v] * (log(sm[v]) - log(sm_ref[v])) for v in range(V))
+                loss_kl = beta * kl
+                grad_kl = beta * sm * (log(sm) - log(sm_ref) - kl)
+
+            elif kl_mode == 'reverse':
+                # Reverse KL — 形式最简洁
+                kl = sum(sm_ref[v] * (log(sm_ref[v]) - log(sm[v])) for v in range(V))
+                loss_kl = beta * kl
+                grad_kl = beta * (sm - sm_ref)
+
             grad_logits = grad_pg + grad_kl
 
             # Backward 穿过 MHA
             dEmbed = policy.backward(dLogits)
-            # 累加梯度并更新
             ...
 ```
 
@@ -164,7 +236,7 @@ GRPO Loss
 
 模型需要通过 causal attention 学习：给定 prompt $a$，生成 $a+1$。
 
-### 训练结果
+### 训练结果（默认 sample 模式）
 
 ```
 epoch   0: loss=0.000324, mean_reward=0.11, acc=0.12
@@ -179,6 +251,14 @@ epoch 599: loss=0.011541, mean_reward=0.88, acc=0.88
 - **Loss**：从 ~0 下降到负值（说明 reward 提升）再回升（模型收敛）
 - **平均奖励**：从 0.11（随机）提升到 **0.88**
 - **准确率**：从 12%（随机）提升到 **88%**
+
+### 三种 KL 模式对比（300 epochs）
+
+| KL 模式 | 最终 Reward | 最终 Acc | 特点 |
+|---------|------------|---------|------|
+| **sample** | 0.75 | 75% | 快速收敛，π_ref 不约束梯度方向 |
+| **forward** | 0.73 | 75% | 最严谨，完整 Forward KL |
+| **reverse** | 0.78 | **100%** | 形式简洁，意外表现最好 |
 
 ### 关键超参数
 
@@ -210,7 +290,9 @@ epoch 599: loss=0.011541, mean_reward=0.88, acc=0.88
 | Advantage 计算 | $A_i = (r_i - \text{mean}) / (\text{std} + \epsilon)$ |
 | Policy Gradient | $-A \cdot \rho \cdot (\mathbf{1} - \text{softmax})$ |
 | PPO Clip | 当 $A>0$ 且 $\rho > 1+\epsilon$ 或 $A<0$ 且 $\rho < 1-\epsilon$ 时梯度为 0 |
-| KL Penalty | $\beta \cdot (\mathbf{1} - \text{softmax})$，约束策略偏离 |
+| KL (sample) | $\beta \cdot (\mathbf{1}_y - \text{softmax})$，π_ref 不影响梯度方向 |
+| KL (forward) | $\beta \cdot \pi \cdot [\log \pi - \log \pi_{ref} - \text{KL}]$，完整严谨 |
+| KL (reverse) | $\beta \cdot (\pi - \pi_{ref})$，形式最简洁 |
 | 工程注意 | 每个 response 单独 forward/backward，梯度累加后统一更新 |
 
-**一句话总结**：GRPO = Group Sampling + Relative Advantage + PPO-Clip + KL —— 不需要 Value Model，用组内竞争代替全局评价，把高奖励回答往上拉，低奖励回答往下压。
+**一句话总结**：GRPO = Group Sampling + Relative Advantage + PPO-Clip + KL —— 不需要 Value Model，用组内竞争代替全局评价，把高奖励回答往上拉，低奖励回答往下压。KL 的实现方式决定了 π_ref 对策略的约束强度。

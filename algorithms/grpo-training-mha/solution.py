@@ -281,7 +281,13 @@ class GRPOTrainer:
     """
 
     def __init__(self, policy, ref_model, group_size=8, beta=0.01,
-                 epsilon=0.2, lr=0.01, grad_clip=1.0):
+                 epsilon=0.2, lr=0.01, grad_clip=1.0, kl_mode='sample'):
+        """
+        kl_mode: 'sample' | 'forward' | 'reverse'
+          - sample: 单点估计 β*(log π(y) - log π_ref(y))，π_ref 不影响梯度方向
+          - forward: Forward KL(π||π_ref) = Σ π(v)[log π(v) - log π_ref(v)]
+          - reverse: Reverse KL(π_ref||π) = Σ π_ref(v)[log π_ref(v) - log π(v)]
+        """
         self.policy = policy
         self.ref_model = ref_model
         self.old_policy = deepcopy(policy)
@@ -290,6 +296,7 @@ class GRPOTrainer:
         self.epsilon = epsilon
         self.lr = lr
         self.grad_clip = grad_clip
+        self.kl_mode = kl_mode
 
     def sample_group(self, prompt, resp_len, temperature=1.0, seed=None):
         """
@@ -406,8 +413,39 @@ class GRPOTrainer:
                 obj2 = ratio_clip * adv
                 loss_pg = -min(obj1, obj2)
 
-                # KL penalty (样本估计)
-                loss_kl = self.beta * (lp - lpr)
+                # KL penalty — 三种实现方式
+                sm = softmax(flat_pi[pos:pos+1], axis=-1)[0]
+                oh = np.zeros_like(sm)
+                oh[flat_t[pos]] = 1.0
+
+                if self.kl_mode == 'sample':
+                    # 单点估计: β*(log π(y) - log π_ref(y))
+                    loss_kl = self.beta * (lp - lpr)
+                    # 梯度: β*(one_hot - softmax)
+                    # π_ref 不参与梯度（被视为常数）
+                    grad_kl = self.beta * (oh - sm)
+
+                elif self.kl_mode == 'forward':
+                    # Forward KL: KL(π||π_ref) = Σ_k π(k)[log π(k) - log π_ref(k)]
+                    logsm_pi_v = logsm_pi[pos]
+                    logsm_ref_v = logsm_ref[pos]
+                    kl = np.sum(sm * (logsm_pi_v - logsm_ref_v))
+                    loss_kl = self.beta * kl
+                    # 梯度: β * π(j) * [log π(j) - log π_ref(j) - KL]
+                    grad_kl = self.beta * sm * (logsm_pi_v - logsm_ref_v - kl)
+
+                elif self.kl_mode == 'reverse':
+                    # Reverse KL: KL(π_ref||π) = Σ_k π_ref(k)[log π_ref(k) - log π(k)]
+                    logsm_pi_v = logsm_pi[pos]
+                    logsm_ref_v = logsm_ref[pos]
+                    sm_ref = softmax(flat_ref[pos:pos+1], axis=-1)[0]
+                    kl = np.sum(sm_ref * (logsm_ref_v - logsm_pi_v))
+                    loss_kl = self.beta * kl
+                    # 梯度: β * (π(j) - π_ref(j))
+                    grad_kl = self.beta * (sm - sm_ref)
+
+                else:
+                    raise ValueError(f"Unknown kl_mode: {self.kl_mode}")
 
                 loss_token = loss_pg + loss_kl
                 total_loss += loss_token
@@ -426,12 +464,11 @@ class GRPOTrainer:
                 #   if adv < 0 and ratio < 1-ε: clip 生效，梯度=0
                 #   else: grad_pg = -adv * ratio * (one_hot - softmax)
                 #
-                # KL: grad_kl = beta * (one_hot - softmax)
+                # KL 模式决定 grad_kl：
+                #   sample : β*(one_hot - softmax)      — π_ref 不进入梯度
+                #   forward: β*π*(log π - log π_ref - KL) — 完整 Forward KL
+                #   reverse: β*(π - π_ref)               — 完整 Reverse KL
                 # ==========================================
-
-                sm = softmax(flat_pi[pos:pos+1], axis=-1)[0]
-                oh = np.zeros_like(sm)
-                oh[flat_t[pos]] = 1.0
 
                 clip_active = (adv > 0 and ratio > 1 + self.epsilon) or \
                               (adv < 0 and ratio < 1 - self.epsilon)
@@ -441,7 +478,6 @@ class GRPOTrainer:
                 else:
                     grad_pg = -adv * ratio * (oh - sm)
 
-                grad_kl = self.beta * (oh - sm)
                 grad_logits = grad_pg + grad_kl
 
                 # 构建 (1, S, V) 的 dLogits，只有当前位置非零
@@ -578,7 +614,8 @@ def train_sft(policy, prompts, resp_len=1, lr=0.005, epochs=300, grad_clip=1.0):
 def train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
                prompt_len=1, resp_len=1,
                group_size=32, beta=0.01, epsilon=0.2,
-               lr=0.002, epochs=600, grad_clip=1.0, weight_decay=0.0001):
+               lr=0.002, epochs=600, grad_clip=1.0, weight_decay=0.0001,
+               kl_mode='sample'):
 
     print("=" * 70)
     print("GRPO 训练 One-Layer MHA Transformer")
@@ -586,11 +623,12 @@ def train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
     print(f"配置: vocab={vocab_size}, d_model={d_model}, heads={n_heads}")
     print(f"      prompt_len={prompt_len}, resp_len={resp_len}, group_size={group_size}")
     print(f"      beta={beta}, epsilon={epsilon}, lr={lr}, epochs={epochs}")
+    print(f"      kl_mode={kl_mode}")
 
     policy = OneLayerTransformer(vocab_size, d_model, n_heads, d_ff,
                                   max_len=prompt_len + resp_len)
     ref_model = deepcopy(policy)
-    trainer = GRPOTrainer(policy, ref_model, group_size, beta, epsilon, lr, grad_clip)
+    trainer = GRPOTrainer(policy, ref_model, group_size, beta, epsilon, lr, grad_clip, kl_mode)
 
     prompts = make_prompt_dataset(8, vocab_size, prompt_len)
 
@@ -652,11 +690,11 @@ def train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
 
 def verify_grpo_gradients():
     """
-    验证 GRPO policy gradient 和 KL penalty 的梯度推导。
+    验证 GRPO policy gradient 和三种 KL penalty 的梯度推导。
     通过固定采样和固定 old/ref logits，只让 policy logits 变化。
     """
     print("=" * 70)
-    print("GRPO 梯度数值验证")
+    print("GRPO 梯度数值验证 — 三种 KL 模式")
     print("=" * 70)
 
     np.random.seed(42)
@@ -679,61 +717,91 @@ def verify_grpo_gradients():
     pos = 2
     target = seq[0, pos]
 
-    def compute_loss_at_pos(logits_pi_pos):
-        # log P
-        m = np.max(logits_pi_pos)
-        logsm = logits_pi_pos - m - np.log(np.sum(np.exp(logits_pi_pos - m)))
-        lp = logsm[target]
+    # Precompute ref softmax for forward/reverse KL
+    mr = np.max(logits_ref[0, pos])
+    logsm_ref_vec = logits_ref[0, pos] - mr - np.log(np.sum(np.exp(logits_ref[0, pos] - mr)))
+    sm_ref_vec = softmax(logits_ref[0, pos:pos+1], axis=-1)[0]
 
-        # old log P
-        mo = np.max(logits_old[0, pos])
-        logsm_old = logits_old[0, pos] - mo - np.log(np.sum(np.exp(logits_old[0, pos] - mo)))
-        lpo = logsm_old[target]
+    # Precompute old log P
+    mo = np.max(logits_old[0, pos])
+    logsm_old_vec = logits_old[0, pos] - mo - np.log(np.sum(np.exp(logits_old[0, pos] - mo)))
+    lpo = logsm_old_vec[target]
 
-        # ref log P
-        mr = np.max(logits_ref[0, pos])
-        logsm_ref = logits_ref[0, pos] - mr - np.log(np.sum(np.exp(logits_ref[0, pos] - mr)))
-        lpr = logsm_ref[target]
+    def make_loss_fn(kl_mode):
+        """返回给定 kl_mode 的 loss 函数。"""
+        def loss_fn(logits_pi_pos):
+            m = np.max(logits_pi_pos)
+            logsm_pi_vec = logits_pi_pos - m - np.log(np.sum(np.exp(logits_pi_pos - m)))
+            lp = logsm_pi_vec[target]
+            sm_pi_vec = np.exp(logsm_pi_vec)
 
+            ratio = np.exp(lp - lpo)
+            ratio_clip = np.clip(ratio, 1 - epsilon, 1 + epsilon)
+            loss_pg = -min(ratio * adv, ratio_clip * adv)
+
+            if kl_mode == 'sample':
+                lpr = logsm_ref_vec[target]
+                loss_kl = beta * (lp - lpr)
+            elif kl_mode == 'forward':
+                kl = np.sum(sm_pi_vec * (logsm_pi_vec - logsm_ref_vec))
+                loss_kl = beta * kl
+            elif kl_mode == 'reverse':
+                kl = np.sum(sm_ref_vec * (logsm_ref_vec - logsm_pi_vec))
+                loss_kl = beta * kl
+            else:
+                raise ValueError(kl_mode)
+            return loss_pg + loss_kl
+        return loss_fn
+
+    def analytical_grad(kl_mode):
+        """计算解析梯度。"""
+        logits_pi = policy.forward(seq)
+        sm = softmax(logits_pi[0, pos:pos+1], axis=-1)[0]
+        oh = np.zeros_like(sm)
+        oh[target] = 1.0
+
+        m = np.max(logits_pi[0, pos])
+        logsm_pi_vec = logits_pi[0, pos] - m - np.log(np.sum(np.exp(logits_pi[0, pos] - m)))
+        lp = logsm_pi_vec[target]
         ratio = np.exp(lp - lpo)
-        ratio_clip = np.clip(ratio, 1 - epsilon, 1 + epsilon)
-        loss_pg = -min(ratio * adv, ratio_clip * adv)
-        loss_kl = beta * (lp - lpr)
-        return loss_pg + loss_kl
 
-    # Analytical gradient
-    logits_pi = policy.forward(seq)
-    sm = softmax(logits_pi[0, pos:pos+1], axis=-1)[0]
-    oh = np.zeros_like(sm)
-    oh[target] = 1.0
+        clip_active = (adv > 0 and ratio > 1 + epsilon) or (adv < 0 and ratio < 1 - epsilon)
+        if clip_active:
+            grad_pg = np.zeros_like(sm)
+        else:
+            grad_pg = -adv * ratio * (oh - sm)
 
-    m = np.max(logits_pi[0, pos])
-    logsm = logits_pi[0, pos] - m - np.log(np.sum(np.exp(logits_pi[0, pos] - m)))
-    lp = logsm[target]
-    lpo = logits_old[0, pos, target] - np.max(logits_old[0, pos]) - \
-          np.log(np.sum(np.exp(logits_old[0, pos] - np.max(logits_old[0, pos]))))
-    ratio = np.exp(lp - lpo)
+        if kl_mode == 'sample':
+            grad_kl = beta * (oh - sm)
+        elif kl_mode == 'forward':
+            kl = np.sum(sm * (logsm_pi_vec - logsm_ref_vec))
+            grad_kl = beta * sm * (logsm_pi_vec - logsm_ref_vec - kl)
+        elif kl_mode == 'reverse':
+            grad_kl = beta * (sm - sm_ref_vec)
+        else:
+            raise ValueError(kl_mode)
 
-    clip_active = (adv > 0 and ratio > 1 + epsilon) or (adv < 0 and ratio < 1 - epsilon)
-    if clip_active:
-        grad_ana = beta * (oh - sm)
-    else:
-        grad_ana = -adv * ratio * (oh - sm) + beta * (oh - sm)
+        return grad_pg + grad_kl
 
-    # Numerical gradient
+    # 数值梯度
     eps = 1e-5
-    grad_num = np.zeros(V)
-    for i in range(V):
-        lp_plus = logits_pi[0, pos].copy()
-        lp_plus[i] += eps
-        loss_plus = compute_loss_at_pos(lp_plus)
-        loss_now = compute_loss_at_pos(logits_pi[0, pos])
-        grad_num[i] = (loss_plus - loss_now) / eps
+    for kl_mode in ['sample', 'forward', 'reverse']:
+        loss_fn = make_loss_fn(kl_mode)
+        grad_ana = analytical_grad(kl_mode)
 
-    rel_err = np.linalg.norm(grad_num - grad_ana) / (np.linalg.norm(grad_num) + 1e-10)
-    print(f"Policy gradient + KL 梯度相对误差: {rel_err:.2e}")
-    print("✓ 梯度推导验证通过" if rel_err < 1e-4 else "✗ 梯度推导有错误！")
-    return rel_err
+        logits_pi = policy.forward(seq)
+        grad_num = np.zeros(V)
+        for i in range(V):
+            lp_plus = logits_pi[0, pos].copy()
+            lp_plus[i] += eps
+            grad_num[i] = (loss_fn(lp_plus) - loss_fn(logits_pi[0, pos])) / eps
+
+        rel_err = np.linalg.norm(grad_num - grad_ana) / (np.linalg.norm(grad_num) + 1e-10)
+        status = "✓ 通过" if rel_err < 1e-4 else "✗ 错误！"
+        print(f"  KL={kl_mode:7s}: rel_err={rel_err:.2e}  {status}")
+
+    print()
+    return True
 
 
 # =============================================================================
@@ -741,12 +809,21 @@ def verify_grpo_gradients():
 # =============================================================================
 
 def demo():
+    # 1. 梯度验证
     verify_grpo_gradients()
-    print()
-    train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
-               prompt_len=1, resp_len=1,
-               group_size=32, beta=0.01, epsilon=0.2,
-               lr=0.002, epochs=600, grad_clip=1.0, weight_decay=0.0001)
+
+    # 2. 三种 KL 模式对比
+    print("=" * 70)
+    print("三种 KL 模式训练对比")
+    print("=" * 70)
+
+    for kl_mode in ['sample', 'forward', 'reverse']:
+        print(f"\n--- KL mode: {kl_mode} ---")
+        train_grpo(vocab_size=8, d_model=64, n_heads=4, d_ff=128,
+                   prompt_len=1, resp_len=1,
+                   group_size=32, beta=0.01, epsilon=0.2,
+                   lr=0.002, epochs=300, grad_clip=1.0, weight_decay=0.0001,
+                   kl_mode=kl_mode)
 
 
 if __name__ == "__main__":
