@@ -40,6 +40,7 @@
 | 032 | [投机解码工程实现](./algorithms/speculative-decoding/) | LLM推理、拒绝采样、工程架构 | ⭐⭐⭐⭐ |
 | 033 | [投机解码进阶: Exact vs Fallback](./algorithms/speculative-decoding-advanced/) | LLM推理优化、工程权衡、分布偏差 | ⭐⭐⭐⭐⭐ |
 | 034 | [DPO 训练 MHA Transformer](./algorithms/dpo-training-mha/) | DPO、偏好优化、梯度推导、收敛性 | ⭐⭐⭐⭐⭐ |
+| 035 | [GRPO 训练 MHA Transformer](./algorithms/grpo-training-mha/) | GRPO、Group Sampling、PPO-Clip、KL约束、梯度推导 | ⭐⭐⭐⭐⭐ |
 
 ## 目录结构
 

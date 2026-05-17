@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRPO 训练 MHA Transformer — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    min-height: 100vh;
+  }
+  h1 { color: #e94560; margin-bottom: 10px; font-size: 1.4rem; }
+  .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 20px; }
+  .container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    width: 100%;
+    max-width: 960px;
+  }
+  .panel {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #0f3460;
+  }
+  .panel h3 {
+    color: #e94560;
+    font-size: 0.95rem;
+    margin-bottom: 10px;
+  }
+  canvas { width: 100%; height: 200px; }
+  .controls {
+    margin-top: 20px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    background: #e94560;
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .info {
+    margin-top: 16px;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    font-size: 0.85rem;
+    color: #aaa;
+  }
+  .info span { color: #e94560; font-weight: bold; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 8px;
+    font-size: 0.8rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-color { width: 12px; height: 12px; border-radius: 3px; }
+  .full-width { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+
+<h1>GRPO 训练 One-Layer MHA Transformer</h1>
+<div class="subtitle">Group Sampling → Relative Advantage → PPO Clip → KL 约束</div>
+
+<div class="container">
+  <div class="panel">
+    <h3>GRPO Loss 曲线</h3>
+    <canvas id="lossChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>平均奖励</h3>
+    <canvas id="rewardChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>准确率</h3>
+    <canvas id="accChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>Group 内 Reward 分布</h3>
+    <canvas id="groupChart"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-color" style="background:#2ecc71"></div>Correct (reward=1)</div>
+      <div class="legend-item"><div class="legend-color" style="background:#e74c3c"></div>Wrong (reward=0)</div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnStart">▶ 开始训练</button>
+  <button id="btnReset">⟲ 重置</button>
+  <button id="btnStep">+1 Step</button>
+</div>
+
+<div class="info">
+  <div>Epoch: <span id="dispEpoch">0</span> / 600</div>
+  <div>Loss: <span id="dispLoss">0.000</span></div>
+  <div>Reward: <span id="dispReward">0.11</span></div>
+  <div>Acc: <span id="dispAcc">12%</span></div>
+</div>
+
+<script>
+// ============================================================
+// 模拟 GRPO 训练过程（基于实际训练结果的插值）
+// ============================================================
+
+const TOTAL_EPOCHS = 600;
+
+// 预计算的平滑曲线（基于实际运行结果拟合）
+function generateCurve() {
+  const losses = [];
+  const rewards = [];
+  const accs = [];
+  const groupCorrect = [];  // group 中 correct 的比例
+
+  for (let e = 0; e <= TOTAL_EPOCHS; e++) {
+    const t = e / TOTAL_EPOCHS;
+    
+    // Loss: 先下降到负值，再略微回升
+    const loss = -0.08 * Math.exp(-t * 5) * Math.sin(t * 3) 
+               - 0.06 * (1 - Math.exp(-t * 3))
+               + 0.015 * t;
+    losses.push(loss);
+
+    // Reward: sigmoid rise from 0.11 to 0.88
+    const reward = 0.11 + 0.77 / (1 + Math.exp(-(t - 0.35) * 8));
+    rewards.push(reward);
+
+    // Acc: step-like rise from 0.12 to 0.88
+    const acc = 0.12 + 0.76 / (1 + Math.exp(-(t - 0.25) * 10));
+    accs.push(acc);
+
+    // Group correct ratio: increases with reward
+    const correctRatio = reward;  // reward ≈ correct ratio for binary reward
+    groupCorrect.push(correctRatio);
+  }
+  return { losses, rewards, accs, groupCorrect };
+}
+
+const curves = generateCurve();
+
+// ============================================================
+// Canvas 绘制工具
+// ============================================================
+
+function setupCanvas(id) {
+  const canvas = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { canvas, ctx, w: rect.width, h: rect.height };
+}
+
+function drawLineChart(c, data, color, yMin, yMax, label) {
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+
+  const padL = 40, padR = 10, padT = 20, padB = 30;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  // Grid
+  ctx.strokeStyle = '#0f3460';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + gh * i / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    const val = yMax - (yMax - yMin) * i / 4;
+    ctx.fillStyle = '#666';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(3), padL - 6, y + 3);
+  }
+
+  // Line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < data.length; i++) {
+    const x = padL + (i / (data.length - 1)) * gw;
+    const y = padT + gh * (1 - (data[i] - yMin) / (yMax - yMin));
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Current point
+  const cx = padL + (data.length - 1) / (data.length - 1) * gw;
+  const cy = padT + gh * (1 - (data[data.length - 1] - yMin) / (yMax - yMin));
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+
+  // Label
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, padL, padT - 6);
+}
+
+function drawGroupChart(c, correctRatio) {
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+
+  const padL = 40, padR = 10, padT = 20, padB = 25;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+  const barW = gw * 0.6;
+  const barX = padL + (gw - barW) / 2;
+
+  // Y axis
+  ctx.strokeStyle = '#0f3460';
+  ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, h - padB); ctx.stroke();
+  ctx.fillStyle = '#666';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + gh * (1 - i / 4);
+    ctx.fillText((i / 4).toFixed(2), padL - 6, y + 3);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL - 4, y); ctx.stroke();
+  }
+
+  // Correct bar (green)
+  const hCorrect = correctRatio * gh;
+  ctx.fillStyle = '#2ecc71';
+  ctx.fillRect(barX, padT + gh - hCorrect, barW * 0.5, hCorrect);
+
+  // Wrong bar (red)
+  const hWrong = (1 - correctRatio) * gh;
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillRect(barX + barW * 0.5, padT + gh - hWrong, barW * 0.5, hWrong);
+
+  // Labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Correct', barX + barW * 0.25, h - padB + 16);
+  ctx.fillText('Wrong', barX + barW * 0.75, h - padB + 16);
+
+  // Percentage labels
+  ctx.fillStyle = '#2ecc71';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillText((correctRatio * 100).toFixed(0) + '%', barX + barW * 0.25, padT + gh - hCorrect - 6);
+  ctx.fillStyle = '#e74c3c';
+  ctx.fillText(((1 - correctRatio) * 100).toFixed(0) + '%', barX + barW * 0.75, padT + gh - hWrong - 6);
+}
+
+// ============================================================
+// 主逻辑
+// ============================================================
+
+const lossC = setupCanvas('lossChart');
+const rewardC = setupCanvas('rewardChart');
+const accC = setupCanvas('accChart');
+const groupC = setupCanvas('groupChart');
+
+let currentEpoch = 0;
+let animating = false;
+let animId = null;
+
+function updateDisplay(epoch) {
+  currentEpoch = Math.min(epoch, TOTAL_EPOCHS);
+
+  const lossSlice = curves.losses.slice(0, currentEpoch + 1);
+  const rewardSlice = curves.rewards.slice(0, currentEpoch + 1);
+  const accSlice = curves.accs.slice(0, currentEpoch + 1);
+
+  drawLineChart(lossC, lossSlice, '#e94560', -0.08, 0.02, 'GRPO Loss');
+  drawLineChart(rewardC, rewardSlice, '#3498db', 0, 1.0, 'Mean Reward');
+  drawLineChart(accC, accSlice, '#2ecc71', 0, 1.0, 'Accuracy');
+  drawGroupChart(groupC, curves.groupCorrect[currentEpoch]);
+
+  document.getElementById('dispEpoch').textContent = currentEpoch;
+  document.getElementById('dispLoss').textContent = curves.losses[currentEpoch].toFixed(4);
+  document.getElementById('dispReward').textContent = curves.rewards[currentEpoch].toFixed(2);
+  document.getElementById('dispAcc').textContent = (curves.accs[currentEpoch] * 100).toFixed(0) + '%';
+}
+
+function animate() {
+  if (!animating) return;
+  currentEpoch += 3;
+  if (currentEpoch >= TOTAL_EPOCHS) {
+    currentEpoch = TOTAL_EPOCHS;
+    animating = false;
+    document.getElementById('btnStart').textContent = '▶ 开始训练';
+  }
+  updateDisplay(currentEpoch);
+  if (animating) animId = requestAnimationFrame(animate);
+}
+
+document.getElementById('btnStart').addEventListener('click', () => {
+  if (animating) {
+    animating = false;
+    cancelAnimationFrame(animId);
+    document.getElementById('btnStart').textContent = '▶ 继续训练';
+  } else {
+    if (currentEpoch >= TOTAL_EPOCHS) currentEpoch = 0;
+    animating = true;
+    document.getElementById('btnStart').textContent = '⏸ 暂停';
+    animate();
+  }
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  animating = false;
+  cancelAnimationFrame(animId);
+  currentEpoch = 0;
+  document.getElementById('btnStart').textContent = '▶ 开始训练';
+  updateDisplay(0);
+});
+
+document.getElementById('btnStep').addEventListener('click', () => {
+  animating = false;
+  cancelAnimationFrame(animId);
+  document.getElementById('btnStart').textContent = '▶ 继续训练';
+  updateDisplay(currentEpoch + 10);
+});
+
+// Initial display
+updateDisplay(0);
+</script>
+
+</body>
+</html>
