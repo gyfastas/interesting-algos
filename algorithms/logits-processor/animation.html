@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Logits Processor — Temperature / Top-k / Top-p 可视化</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --accent: #e94560;
+    --accent2: #0f3460;
+    --accent3: #2ecc71;
+    --text: #eaeaea;
+    --text-dim: #a0a0a0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 { text-align: center; padding: 20px; font-size: 1.4rem; }
+  .container { display: flex; flex: 1; gap: 20px; padding: 0 20px 20px; min-height: 0; }
+  .panel {
+    background: var(--panel);
+    border-radius: 12px;
+    padding: 20px;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+  .panel h2 { font-size: 1rem; margin-bottom: 5px; color: var(--accent); }
+  .control-group { display: flex; flex-direction: column; gap: 6px; }
+  .control-group label { font-size: 0.8rem; color: var(--text-dim); }
+  .control-group input[type="range"] { width: 100%; }
+  .control-group .value-display {
+    font-size: 0.85rem;
+    color: var(--accent);
+    font-weight: 600;
+    text-align: right;
+  }
+  .btn-group { display: flex; gap: 10px; }
+  button {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  button:hover { opacity: 0.85; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary { background: var(--accent2); color: var(--text); }
+
+  .canvas-area {
+    flex: 1;
+    background: var(--panel);
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .chart-title {
+    text-align: center;
+    padding: 15px;
+    font-size: 1rem;
+    color: var(--text-dim);
+  }
+  canvas { display: block; width: 100%; flex: 1; }
+
+  .legend {
+    position: absolute;
+    bottom: 15px;
+    left: 15px;
+    display: flex;
+    gap: 20px;
+    font-size: 0.75rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    font-size: 0.8rem;
+  }
+  .stat-box {
+    background: var(--bg);
+    padding: 10px;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .stat-box .label { color: var(--text-dim); font-size: 0.7rem; }
+  .stat-box .value { color: var(--accent); font-weight: 600; font-size: 1rem; }
+
+  .kept-list {
+    background: var(--bg);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 0.8rem;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .kept-token { display: flex; justify-content: space-between; padding: 2px 0; }
+  .kept-token.heads { color: var(--accent3); font-weight: 600; }
+  .kept-token.filtered { color: var(--text-dim); text-decoration: line-through; }
+</style>
+</head>
+<body>
+<h1>🔥 Logits Processor — Temperature / Top-k / Top-p 可视化</h1>
+<div class="container">
+  <div class="panel">
+    <h2>参数控制</h2>
+    <div class="control-group">
+      <label>Temperature: <span id="valTemp">1.00</span></label>
+      <input type="range" id="temp" min="0.1" max="3.0" step="0.1" value="1.0">
+    </div>
+    <div class="control-group">
+      <label>Top-k: <span id="valTopK">0 (关闭)</span></label>
+      <input type="range" id="topK" min="0" max="20" step="1" value="0">
+    </div>
+    <div class="control-group">
+      <label>Top-p: <span id="valTopP">1.00 (关闭)</span></label>
+      <input type="range" id="topP" min="0.01" max="1.0" step="0.01" value="1.0">
+    </div>
+    <div class="btn-group">
+      <button class="btn-primary" onclick="randomize()">🎲 随机 logits</button>
+      <button class="btn-secondary" onclick="resetParams()">⟲ 重置</button>
+    </div>
+
+    <h2>统计</h2>
+    <div class="stats">
+      <div class="stat-box"><div class="label">保留 token 数</div><div class="value" id="statKept">-</div></div>
+      <div class="stat-box"><div class="label">过滤率</div><div class="value" id="statFilter">-</div></div>
+      <div class="stat-box"><div class="label">最大概率</div><div class="value" id="statMax">-</div></div>
+      <div class="stat-box"><div class="label">熵 (nats)</div><div class="value" id="statEntropy">-</div></div>
+    </div>
+
+    <h2>保留的 Token</h2>
+    <div class="kept-list" id="keptList">点击「随机 logits」开始</div>
+  </div>
+
+  <div class="canvas-area">
+    <div class="chart-title">处理后的概率分布 (Softmax)</div>
+    <canvas id="chart"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--accent)"></div> 保留</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#333"></div> 过滤 (-inf)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let vocabSize = 30;
+let logits = [];
+let vocabNames = [];
+
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height - 50;
+  if (logits.length > 0) update();
+}
+window.addEventListener('resize', resizeCanvas);
+
+function softmax(arr) {
+  const max = Math.max(...arr);
+  const exps = arr.map(v => Math.exp(v - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(e => e / sum);
+}
+
+function entropy(probs) {
+  return -probs.filter(p => p > 0).reduce((sum, p) => sum + p * Math.log(p), 0);
+}
+
+function generateLogits() {
+  vocabSize = 30;
+  logits = Array.from({length: vocabSize}, () => (Math.random() - 0.5) * 6);
+  vocabNames = Array.from({length: vocabSize}, (_, i) => `t${i.toString().padStart(2, '0')}`);
+}
+
+function processLogits() {
+  const T = parseFloat(document.getElementById('temp').value);
+  const k = parseInt(document.getElementById('topK').value);
+  const p = parseFloat(document.getElementById('topP').value);
+
+  let out = logits.map(v => v / T);
+
+  // Top-k
+  if (k > 0 && k < vocabSize) {
+    const sorted = [...out].map((v, i) => ({v, i})).sort((a, b) => b.v - a.v);
+    const threshold = sorted[k - 1].v;
+    out = out.map(v => v >= threshold ? v : -Infinity);
+  }
+
+  // Top-p
+  if (p < 1.0) {
+    const probs = softmax(out);
+    const indexed = probs.map((pr, i) => ({pr, i}));
+    indexed.sort((a, b) => b.pr - a.pr);
+
+    let cumsum = 0;
+    const keepSet = new Set();
+    for (const item of indexed) {
+      if (cumsum > p && keepSet.size > 0) break;
+      keepSet.add(item.i);
+      cumsum += item.pr;
+    }
+
+    // Fallback: if all filtered, restore max prob token
+    if (keepSet.size === 0) {
+      let maxIdx = 0;
+      for (let i = 1; i < probs.length; i++) {
+        if (probs[i] > probs[maxIdx]) maxIdx = i;
+      }
+      keepSet.add(maxIdx);
+    }
+
+    out = out.map((v, i) => keepSet.has(i) ? v : -Infinity);
+  }
+
+  return out;
+}
+
+function update() {
+  const processed = processLogits();
+  const probs = softmax(processed.map(v => isFinite(v) ? v : -100));
+  const keptMask = processed.map(v => isFinite(v));
+  const keptCount = keptMask.filter(Boolean).length;
+
+  // Update stats
+  document.getElementById('statKept').textContent = keptCount;
+  document.getElementById('statFilter').textContent = ((1 - keptCount / vocabSize) * 100).toFixed(0) + '%';
+  document.getElementById('statMax').textContent = Math.max(...probs).toFixed(3);
+  document.getElementById('statEntropy').textContent = entropy(probs).toFixed(2);
+
+  // Update kept list
+  const indexed = probs.map((pr, i) => ({pr, i, name: vocabNames[i], kept: keptMask[i]}));
+  indexed.sort((a, b) => b.pr - a.pr);
+  const listHtml = indexed.map(item => {
+    const cls = item.kept ? (item.pr > 0.1 ? 'heads' : '') : 'filtered';
+    return `<div class="kept-token ${cls}"><span>${item.name}</span><span>${item.pr.toFixed(4)}</span></div>`;
+  }).join('');
+  document.getElementById('keptList').innerHTML = listHtml;
+
+  // Draw chart
+  drawChart(probs, keptMask);
+}
+
+function drawChart(probs, keptMask) {
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const margin = {top: 20, right: 10, bottom: 40, left: 50};
+  const cw = w - margin.left - margin.right;
+  const ch = h - margin.top - margin.bottom;
+  const barW = cw / vocabSize * 0.7;
+  const gap = cw / vocabSize * 0.3;
+
+  const maxP = Math.max(...probs, 0.01);
+
+  // Grid lines
+  ctx.strokeStyle = '#0f3460';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = margin.top + ch - (i / 4) * ch;
+    ctx.beginPath();
+    ctx.moveTo(margin.left, y);
+    ctx.lineTo(w - margin.right, y);
+    ctx.stroke();
+
+    ctx.fillStyle = '#a0a0a0';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText((i / 4 * maxP).toFixed(2), margin.left - 5, y + 3);
+  }
+
+  // Bars
+  for (let i = 0; i < vocabSize; i++) {
+    const x = margin.left + i * (barW + gap) + gap / 2;
+    const barH = (probs[i] / maxP) * ch;
+    const y = margin.top + ch - barH;
+
+    ctx.fillStyle = keptMask[i] ? 'var(--accent)' : '#333';
+    ctx.fillRect(x, y, barW, barH);
+
+    // Label
+    ctx.fillStyle = keptMask[i] ? '#eaeaea' : '#555';
+    ctx.font = keptMask[i] ? 'bold 9px sans-serif' : '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.save();
+    ctx.translate(x + barW / 2, margin.top + ch + 12);
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillText(vocabNames[i], 0, 0);
+    ctx.restore();
+  }
+}
+
+function randomize() {
+  generateLogits();
+  update();
+}
+
+function resetParams() {
+  document.getElementById('temp').value = 1.0;
+  document.getElementById('topK').value = 0;
+  document.getElementById('topP').value = 1.0;
+  updateLabels();
+  update();
+}
+
+function updateLabels() {
+  const T = parseFloat(document.getElementById('temp').value);
+  const k = parseInt(document.getElementById('topK').value);
+  const p = parseFloat(document.getElementById('topP').value);
+  document.getElementById('valTemp').textContent = T.toFixed(2);
+  document.getElementById('valTopK').textContent = k === 0 ? '0 (关闭)' : k;
+  document.getElementById('valTopP').textContent = p >= 1.0 ? '1.00 (关闭)' : p.toFixed(2);
+}
+
+document.getElementById('temp').addEventListener('input', () => { updateLabels(); update(); });
+document.getElementById('topK').addEventListener('input', () => { updateLabels(); update(); });
+document.getElementById('topP').addEventListener('input', () => { updateLabels(); update(); });
+
+resizeCanvas();
+generateLogits();
+updateLabels();
+update();
+</script>
+</body>
+</html>
