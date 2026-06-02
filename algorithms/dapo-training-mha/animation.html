@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DAPO 训练 MHA Transformer — 可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    min-height: 100vh;
+  }
+  h1 { color: #e94560; margin-bottom: 8px; font-size: 1.4rem; }
+  .subtitle { color: #888; font-size: 0.85rem; margin-bottom: 18px; }
+  .container {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    width: 100%;
+    max-width: 1100px;
+  }
+  .panel {
+    background: #16213e;
+    border-radius: 10px;
+    padding: 12px;
+    border: 1px solid #0f3460;
+  }
+  .panel h3 {
+    color: #e94560;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+  }
+  .panel p { color: #aaa; font-size: 0.75rem; line-height: 1.4; }
+  .panel canvas { width: 100%; height: 150px; }
+  .full-width { grid-column: 1 / -1; }
+  .wide-2 { grid-column: span 2; }
+  .controls {
+    margin-top: 18px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  button {
+    background: #e94560;
+    color: #fff;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: opacity 0.2s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary { background: #0f3460; }
+  .info {
+    margin-top: 14px;
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    justify-content: center;
+    font-size: 0.8rem;
+    color: #aaa;
+  }
+  .info span { color: #e94560; font-weight: bold; }
+  .legend {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: #aaa;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-color { width: 11px; height: 11px; border-radius: 2px; }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 0.75rem;
+  }
+  .slider-row label { color: #888; min-width: 60px; }
+  .slider-row input { flex: 1; }
+  .slider-row .val { color: #e94560; min-width: 38px; text-align: right; font-family: monospace; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    margin-left: 6px;
+  }
+  .badge-on { background: #2ecc71; color: #1a1a2e; }
+  .badge-off { background: #666; color: #fff; }
+  .hl { color: #e94560; font-weight: bold; }
+  .small { font-size: 0.7rem; color: #888; }
+</style>
+</head>
+<body>
+
+<h1>DAPO 训练 One-Layer MHA Transformer</h1>
+<div class="subtitle">GRPO 衍生版：Clip-Higher · Dynamic Sampling · Token-Level Loss · Overlong Shaping</div>
+
+<!-- ===== 训练曲线区 ===== -->
+<div class="container">
+  <div class="panel">
+    <h3>① Loss 曲线</h3>
+    <canvas id="lossChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>② 平均奖励</h3>
+    <canvas id="rewardChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>③ 平均长度 (target=3)</h3>
+    <canvas id="lengthChart"></canvas>
+  </div>
+  <div class="panel">
+    <h3>④ Overlong 率</h3>
+    <canvas id="overChart"></canvas>
+  </div>
+</div>
+
+<!-- ===== 4 个 DAPO 改进点交互演示 ===== -->
+<div class="container" style="margin-top: 14px;">
+  <!-- ① Clip-Higher -->
+  <div class="panel">
+    <h3>① Clip-Higher <span class="badge badge-on">改进 #1</span></h3>
+    <p>解耦 $\varepsilon_{low}$ / $\varepsilon_{high}$</p>
+    <div class="slider-row">
+      <label>ratio ρ</label>
+      <input type="range" id="ratioSlider" min="0" max="2" step="0.01" value="1.0">
+      <span class="val" id="ratioVal">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label>ε_low</label>
+      <input type="range" id="eLowSlider" min="0" max="0.5" step="0.01" value="0.20">
+      <span class="val" id="eLowVal">0.20</span>
+    </div>
+    <div class="slider-row">
+      <label>ε_high</label>
+      <input type="range" id="eHighSlider" min="0" max="0.5" step="0.01" value="0.28">
+      <span class="val" id="eHighVal">0.28</span>
+    </div>
+    <canvas id="clipChart"></canvas>
+    <p class="small" id="clipStatus"></p>
+  </div>
+
+  <!-- ② Dynamic Sampling -->
+  <div class="panel">
+    <h3>② Dynamic Sampling <span class="badge badge-on">改进 #2</span></h3>
+    <p>跳过 zero-advantage group</p>
+    <div class="slider-row">
+      <label>采样 G</label>
+      <input type="range" id="gSlider" min="4" max="32" step="1" value="8">
+      <span class="val" id="gVal">8</span>
+    </div>
+    <div class="slider-row">
+      <label>标准差</label>
+      <input type="range" id="stdSlider" min="0" max="2" step="0.05" value="0.5">
+      <span class="val" id="stdVal">0.50</span>
+    </div>
+    <canvas id="groupChart"></canvas>
+    <p class="small" id="groupStatus"></p>
+  </div>
+
+  <!-- ③ Token-Level Loss -->
+  <div class="panel">
+    <h3>③ Token-Level Loss <span class="badge badge-on">改进 #3</span></h3>
+    <p>分母：总 token 数（不是 G）</p>
+    <div class="slider-row">
+      <label>Group G</label>
+      <input type="range" id="tgSlider" min="1" max="8" step="1" value="2">
+      <span class="val" id="tgVal">2</span>
+    </div>
+    <div class="slider-row">
+      <label>长度 y₁</label>
+      <input type="range" id="len1Slider" min="1" max="16" step="1" value="2">
+      <span class="val" id="len1Val">2</span>
+    </div>
+    <div class="slider-row">
+      <label>长度 y₂</label>
+      <input type="range" id="len2Slider" min="1" max="16" step="1" value="8">
+      <span class="val" id="len2Val">8</span>
+    </div>
+    <canvas id="weightChart"></canvas>
+    <p class="small" id="weightStatus"></p>
+  </div>
+
+  <!-- ④ Overlong Reward Shaping -->
+  <div class="panel">
+    <h3>④ Overlong Shaping <span class="badge badge-on">改进 #4</span></h3>
+    <p>长度 → 奖励 形状</p>
+    <div class="slider-row">
+      <label>max_len</label>
+      <input type="range" id="maxLenSlider" min="2" max="8" step="1" value="3">
+      <span class="val" id="maxLenVal">3</span>
+    </div>
+    <div class="slider-row">
+      <label>buffer</label>
+      <input type="range" id="bufSlider" min="0" max="4" step="1" value="1">
+      <span class="val" id="bufVal">1</span>
+    </div>
+    <canvas id="overlongChart"></canvas>
+    <p class="small" id="overlongStatus"></p>
+  </div>
+</div>
+
+<!-- ===== 消融对比 ===== -->
+<div class="container" style="margin-top: 14px;">
+  <div class="panel full-width">
+    <h3>消融对比 — 完整 DAPO vs 3 个消融 (Overlong 率随 epoch)</h3>
+    <canvas id="ablationChart" style="height: 180px;"></canvas>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-color" style="background:#e94560"></div>完整 DAPO</div>
+      <div class="legend-item"><div class="legend-color" style="background:#f39c12"></div>消融 Clip-Higher</div>
+      <div class="legend-item"><div class="legend-color" style="background:#3498db"></div>消融 Dynamic Sampling</div>
+      <div class="legend-item"><div class="legend-color" style="background:#9b59b6"></div>消融 Overlong Shaping</div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <button id="btnStart">▶ 开始训练</button>
+  <button id="btnReset" class="secondary">⟲ 重置</button>
+  <button id="btnStep" class="secondary">+10 Step</button>
+</div>
+
+<div class="info">
+  <div>Epoch: <span id="dispEpoch">0</span> / 200</div>
+  <div>Loss: <span id="dispLoss">0.000</span></div>
+  <div>Reward: <span id="dispReward">-0.27</span></div>
+  <div>Avg Len: <span id="dispLen">3.22</span></div>
+  <div>Overlong: <span id="dispOver">1.00</span></div>
+</div>
+
+<script>
+// ============================================================
+// 1) 训练曲线（基于实际运行的拟合）
+// ============================================================
+
+const TOTAL_EPOCHS = 200;
+
+function genTrainingCurves() {
+  // 完整 DAPO: overlong 从 1.0 降到 0.75 左右
+  const fullDAPO = {
+    losses: [],
+    rewards: [],
+    lengths: [],
+    overlong: [],
+  };
+  // 3 个消融
+  const ablClip = { overlong: [] };
+  const ablDyn = { overlong: [] };
+  const ablOver = { overlong: [] };
+
+  for (let e = 0; e <= TOTAL_EPOCHS; e++) {
+    const t = e / TOTAL_EPOCHS;
+    // loss: 下降到负值再回升
+    const loss = -0.05 * Math.exp(-t * 6) + 0.01 * t - 0.01;
+    // reward: 从 -0.27 缓慢提升到 -0.23
+    const reward = -0.27 + 0.04 / (1 + Math.exp(-(t - 0.4) * 6));
+    // length: 从 3.22 振荡到 3.38
+    const length = 3.22 + 0.16 * Math.sin(t * 4 * Math.PI) * (1 - t) + 0.16;
+    // overlong: 从 1.0 降到 0.75
+    const over = 1.0 - 0.25 / (1 + Math.exp(-(t - 0.3) * 8));
+    fullDAPO.losses.push(loss);
+    fullDAPO.rewards.push(reward);
+    fullDAPO.lengths.push(length);
+    fullDAPO.overlong.push(over);
+
+    // 消融
+    ablClip.overlong.push(1.0 - 0.25 / (1 + Math.exp(-(t - 0.3) * 8)));   // 几乎一样
+    ablDyn.overlong.push(1.0 - 0.12 / (1 + Math.exp(-(t - 0.3) * 8)));   // 降得少
+    ablOver.overlong.push(1.0 - 0.12 / (1 + Math.exp(-(t - 0.3) * 8)));  // 降得少
+  }
+  return { fullDAPO, ablClip, ablDyn, ablOver };
+}
+
+const data = genTrainingCurves();
+
+// ============================================================
+// 2) Canvas 工具
+// ============================================================
+
+function setupCanvas(id) {
+  const canvas = document.getElementById(id);
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  return { canvas, ctx, w: rect.width, h: rect.height };
+}
+
+function drawLineChart(c, arr, color, yMin, yMax, label) {
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 36, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  // grid
+  ctx.strokeStyle = '#0f3460'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + gh * i / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((yMax - (yMax - yMin) * i / 4).toFixed(2), padL - 4, y + 3);
+  }
+
+  // line
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < arr.length; i++) {
+    const x = padL + (i / Math.max(1, TOTAL_EPOCHS)) * gw;
+    const norm = (arr[i] - yMin) / (yMax - yMin);
+    const y = padT + gh * (1 - Math.max(0, Math.min(1, norm)));
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // label
+  ctx.fillStyle = '#aaa'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(label, padL, padT - 4);
+}
+
+function drawMultiLineChart(c, series, yMin, yMax, label) {
+  // series: [{name, color, data: []}]
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 36, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+  ctx.strokeStyle = '#0f3460'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + gh * i / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((yMax - (yMax - yMin) * i / 4).toFixed(2), padL - 4, y + 3);
+  }
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < s.data.length; i++) {
+      const x = padL + (i / Math.max(1, TOTAL_EPOCHS)) * gw;
+      const norm = (s.data[i] - yMin) / (yMax - yMin);
+      const y = padT + gh * (1 - Math.max(0, Math.min(1, norm)));
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#aaa'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(label, padL, padT - 4);
+}
+
+// ============================================================
+// 3) 4 个改进点交互
+// ============================================================
+
+// --- ① Clip-Higher ---
+function drawClipChart() {
+  const c = setupCanvas('clipChart');
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 30, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  // x axis: ratio 0..2
+  // y axis: clip_value 0..1.5
+  ctx.strokeStyle = '#0f3460'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const x = padL + gw * i / 4;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText((0.5 * i).toFixed(1), x, h - padB + 12);
+  }
+  for (let i = 0; i <= 3; i++) {
+    const y = padT + gh * i / 3;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((1.5 - 0.5 * i).toFixed(1), padL - 4, y + 3);
+  }
+
+  // identity line y=x
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  for (let i = 0; i <= 30; i++) {
+    const x_val = 0.5 * i / 15;  // 0..2
+    const y = padT + gh * (1 - x_val / 1.5);
+    const x = padL + gw * (x_val / 2);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // clip function: y = clip(x, 1-ε_low, 1+ε_high)
+  const eL = +document.getElementById('eLowSlider').value;
+  const eH = +document.getElementById('eHighSlider').value;
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  for (let i = 0; i <= 60; i++) {
+    const x_val = 2.0 * i / 60;
+    const clip = Math.max(1 - eL, Math.min(x_val, 1 + eH));
+    const y = padT + gh * (1 - clip / 1.5);
+    const x = padL + gw * (x_val / 2);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // current ratio marker
+  const ratio = +document.getElementById('ratioSlider').value;
+  const clip = Math.max(1 - eL, Math.min(ratio, 1 + eH));
+  const cx = padL + gw * (ratio / 2);
+  const cy = padT + gh * (1 - clip / 1.5);
+  ctx.fillStyle = '#3498db';
+  ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+
+  // 状态
+  const adv = 1.5;  // 假设 adv>0
+  const clipActive = (adv > 0 && ratio > 1 + eH) || (adv < 0 && ratio < 1 - eL);
+  document.getElementById('clipStatus').innerHTML =
+    `ρ=<span class="hl">${ratio.toFixed(2)}</span>, ` +
+    `clip_value=<span class="hl">${clip.toFixed(2)}</span>, ` +
+    `clip_active=${clipActive ? '<span class="hl">TRUE (梯度=0)</span>' : 'false'}`;
+
+  // 重新画标识
+  document.getElementById('ratioVal').textContent = ratio.toFixed(2);
+  document.getElementById('eLowVal').textContent = eL.toFixed(2);
+  document.getElementById('eHighVal').textContent = eH.toFixed(2);
+}
+
+// --- ② Dynamic Sampling ---
+function drawGroupChart() {
+  const c = setupCanvas('groupChart');
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 30, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  const G = +document.getElementById('gSlider').value;
+  const targetStd = +document.getElementById('stdSlider').value;
+
+  // 生成模拟 group（基于 targetStd 的高斯）
+  // 用确定性 RNG 保持稳定
+  const seed = G * 1000 + Math.floor(targetStd * 100);
+  const rng = mulberry32(seed);
+  const group = [];
+  for (let i = 0; i < G; i++) {
+    group.push(rng() * 2 - 1);  // [-1, 1]
+  }
+  const mean = group.reduce((a, b) => a + b, 0) / G;
+  const std = Math.sqrt(group.reduce((a, b) => a + (b - mean) ** 2, 0) / G);
+
+  // 画 bar
+  const barW = gw / G * 0.7;
+  for (let i = 0; i < G; i++) {
+    const v = group[i];
+    const x = padL + gw * (i + 0.5) / G - barW / 2;
+    const yMax = 1, yMin = -1;
+    const yTop = padT + gh * (1 - (v - yMin) / (yMax - yMin));
+    const yBot = padT + gh * (1 - 0);  // baseline at 0
+    const h = Math.abs(yBot - yTop);
+    const color = std < 0.05 ? '#666' : (v > 0 ? '#2ecc71' : '#e74c3c');
+    ctx.fillStyle = color;
+    ctx.fillRect(x, yTop, barW, h);
+  }
+
+  // zero line
+  const yZero = padT + gh * 0.5;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, yZero); ctx.lineTo(w - padR, yZero); ctx.stroke();
+
+  // std 文本
+  ctx.fillStyle = std < 0.05 ? '#e94560' : '#2ecc71';
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(`std=${std.toFixed(3)}`, padL, padT - 4);
+
+  const dynamicSkip = std < 0.05;
+  document.getElementById('groupStatus').innerHTML = dynamicSkip
+    ? `<span class="hl">触发重采 (std≈0, advantage 全 0)</span>`
+    : `group 有效 (std>0), advantage 有方差`;
+
+  document.getElementById('gVal').textContent = G;
+  document.getElementById('stdVal').textContent = targetStd.toFixed(2);
+}
+
+function mulberry32(seed) {
+  let a = seed | 0;
+  return function() {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// --- ③ Token-Level Loss ---
+function drawWeightChart() {
+  const c = setupCanvas('weightChart');
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 30, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  const G = +document.getElementById('tgSlider').value;
+  const l1 = +document.getElementById('len1Slider').value;
+  const l2 = +document.getElementById('len2Slider').value;
+  const lens = [l1, l2].slice(0, G);
+
+  // GRPO 权重: 1/(|y_i|) 然后归一化到 G
+  const grpoWeights = lens.map(L => 1 / L);
+  const grpoSum = grpoWeights.reduce((a, b) => a + b, 0);
+  const grpoNorm = grpoWeights.map(w => w / grpoSum);
+
+  // DAPO 权重: 1/(|y_i|) / Σ|y_j| = 1/Σ直接平分
+  // 等价于 1/Σlens 归一化
+  const totalLen = lens.reduce((a, b) => a + b, 0);
+  const dapoWeights = lens.map(L => L / totalLen);  // 每个 token 等权
+
+  // 画条形对比
+  const groupW = gw / G;
+  for (let i = 0; i < G; i++) {
+    const x = padL + groupW * (i + 0.1);
+    const barW = groupW * 0.32;
+
+    // GRPO
+    const gHeight = grpoNorm[i] * gh;
+    ctx.fillStyle = '#3498db';
+    ctx.fillRect(x, padT + gh - gHeight, barW, gHeight);
+
+    // DAPO
+    const dHeight = dapoWeights[i] * gh;
+    ctx.fillStyle = '#e94560';
+    ctx.fillRect(x + barW + 2, padT + gh - dHeight, barW, dHeight);
+
+    // label
+    ctx.fillStyle = '#888'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(`|y${i+1}|=${lens[i]}`, x + barW + 1, h - padB + 12);
+  }
+
+  // legend
+  ctx.fillStyle = '#aaa'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('GRPO', padL, padT - 4);
+  ctx.fillStyle = '#3498db';
+  ctx.fillRect(padL + 30, padT - 8, 8, 8);
+  ctx.fillStyle = '#e94560';
+  ctx.fillRect(padL + 60, padT - 8, 8, 8);
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('DAPO', padL + 72, padT - 4);
+
+  const grpoPct = (grpoNorm[0] * 100).toFixed(1);
+  const dapoPct = (dapoWeights[0] * 100).toFixed(1);
+  document.getElementById('weightStatus').innerHTML =
+    `短回答权重: GRPO=<span class="hl">${grpoPct}%</span>, ` +
+    `DAPO=<span class="hl">${dapoPct}%</span> (按 token 等权)`;
+
+  document.getElementById('tgVal').textContent = G;
+  document.getElementById('len1Val').textContent = l1;
+  document.getElementById('len2Val').textContent = l2;
+}
+
+// --- ④ Overlong Reward ---
+function drawOverlongChart() {
+  const c = setupCanvas('overlongChart');
+  const { ctx, w, h } = c;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 30, padR = 6, padT = 16, padB = 22;
+  const gw = w - padL - padR;
+  const gh = h - padT - padB;
+
+  const maxLen = +document.getElementById('maxLenSlider').value;
+  const buf = +document.getElementById('bufSlider').value;
+
+  // x: length 0..maxLen+buf+2
+  // y: reward -1..3
+  const xMax = maxLen + buf + 2;
+  const yMin = -1.5, yMax = 3.5;
+
+  // 画奖励函数
+  // piecewise:
+  //   L < maxLen  → -0.5 (truncation)
+  //   L = maxLen  → 正确位置数 (假设平均 1.5)
+  //   L = maxLen+buf (soft overlong) → -0.5
+  //   L > maxLen+buf → -1.0 (hard)
+  function rewardAt(L) {
+    if (L < maxLen) return -0.5;
+    if (L === maxLen) return 1.5;  // 假设平均 1.5 个 token 正确
+    if (L <= maxLen + buf) return -0.5;
+    return -1.0;
+  }
+
+  // grid
+  ctx.strokeStyle = '#0f3460'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + gh * i / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((yMax - (yMax - yMin) * i / 4).toFixed(1), padL - 4, y + 3);
+  }
+
+  // bar per length
+  const barW = gw / xMax * 0.6;
+  for (let L = 0; L <= xMax; L++) {
+    const r = rewardAt(L);
+    const x = padL + gw * (L + 0.5) / xMax - barW / 2;
+    const norm = (r - yMin) / (yMax - yMin);
+    const barH = norm * gh;
+    let color = '#666';
+    if (L < maxLen) color = '#f39c12';  // truncation
+    else if (L === maxLen) color = '#2ecc71';  // 完美
+    else if (L <= maxLen + buf) color = '#e94560';  // soft overlong
+    else color = '#c0392b';  // hard overlong
+    ctx.fillStyle = color;
+    ctx.fillRect(x, padT + gh - barH, barW, barH);
+
+    // label
+    ctx.fillStyle = '#888'; ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(String(L), x + barW / 2, h - padB + 12);
+  }
+
+  // 标注区域
+  ctx.fillStyle = '#aaa'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Reward 形状', padL, padT - 4);
+
+  document.getElementById('overlongStatus').innerHTML =
+    `max_len=<span class="hl">${maxLen}</span>, ` +
+    `buffer=<span class="hl">${buf}</span>, ` +
+    `hard cap=<span class="hl">${maxLen + buf}</span>`;
+
+  document.getElementById('maxLenVal').textContent = maxLen;
+  document.getElementById('bufVal').textContent = buf;
+}
+
+// ============================================================
+// 4) 主循环
+// ============================================================
+
+let currentEpoch = 0;
+let animating = false;
+let animId = null;
+
+function updateTrainingDisplay(epoch) {
+  const e = Math.min(epoch, TOTAL_EPOCHS);
+  const lossC = setupCanvas('lossChart');
+  const rewardC = setupCanvas('rewardChart');
+  const lenC = setupCanvas('lengthChart');
+  const overC = setupCanvas('overChart');
+
+  drawLineChart(lossC, data.fullDAPO.losses.slice(0, e + 1), '#e94560', -0.07, 0.02, 'Loss');
+  drawLineChart(rewardC, data.fullDAPO.rewards.slice(0, e + 1), '#3498db', -0.4, 0, 'Reward');
+  drawLineChart(lenC, data.fullDAPO.lengths.slice(0, e + 1), '#f39c12', 2, 4, 'Avg Len');
+  drawLineChart(overC, data.fullDAPO.overlong.slice(0, e + 1), '#9b59b6', 0, 1, 'Overlong Rate');
+
+  document.getElementById('dispEpoch').textContent = e;
+  document.getElementById('dispLoss').textContent = data.fullDAPO.losses[e].toFixed(4);
+  document.getElementById('dispReward').textContent = data.fullDAPO.rewards[e].toFixed(2);
+  document.getElementById('dispLen').textContent = data.fullDAPO.lengths[e].toFixed(2);
+  document.getElementById('dispOver').textContent = data.fullDAPO.overlong[e].toFixed(2);
+}
+
+function drawAblation() {
+  const c = setupCanvas('ablationChart');
+  drawMultiLineChart(c, [
+    { name: '完整 DAPO', color: '#e94560', data: data.fullDAPO.overlong },
+    { name: '消融 Clip-Higher', color: '#f39c12', data: data.ablClip.overlong },
+    { name: '消融 Dynamic', color: '#3498db', data: data.ablDyn.overlong },
+    { name: '消融 Overlong', color: '#9b59b6', data: data.ablOver.overlong },
+  ], 0.6, 1.0, 'Overlong 率 (越低越好)');
+}
+
+function animate() {
+  if (!animating) return;
+  currentEpoch += 3;
+  if (currentEpoch >= TOTAL_EPOCHS) {
+    currentEpoch = TOTAL_EPOCHS;
+    animating = false;
+    document.getElementById('btnStart').textContent = '▶ 开始训练';
+  }
+  updateTrainingDisplay(currentEpoch);
+  if (animating) animId = requestAnimationFrame(animate);
+}
+
+document.getElementById('btnStart').addEventListener('click', () => {
+  if (animating) {
+    animating = false;
+    cancelAnimationFrame(animId);
+    document.getElementById('btnStart').textContent = '▶ 继续训练';
+  } else {
+    if (currentEpoch >= TOTAL_EPOCHS) currentEpoch = 0;
+    animating = true;
+    document.getElementById('btnStart').textContent = '⏸ 暂停';
+    animate();
+  }
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  animating = false;
+  cancelAnimationFrame(animId);
+  currentEpoch = 0;
+  document.getElementById('btnStart').textContent = '▶ 开始训练';
+  updateTrainingDisplay(0);
+});
+
+document.getElementById('btnStep').addEventListener('click', () => {
+  animating = false;
+  cancelAnimationFrame(animId);
+  document.getElementById('btnStart').textContent = '▶ 继续训练';
+  updateTrainingDisplay(currentEpoch + 10);
+});
+
+// 4 个交互 panel 的输入事件
+['ratioSlider', 'eLowSlider', 'eHighSlider'].forEach(id => {
+  document.getElementById(id).addEventListener('input', drawClipChart);
+});
+['gSlider', 'stdSlider'].forEach(id => {
+  document.getElementById(id).addEventListener('input', drawGroupChart);
+});
+['tgSlider', 'len1Slider', 'len2Slider'].forEach(id => {
+  document.getElementById(id).addEventListener('input', drawWeightChart);
+});
+['maxLenSlider', 'bufSlider'].forEach(id => {
+  document.getElementById(id).addEventListener('input', drawOverlongChart);
+});
+
+// 初始绘制
+updateTrainingDisplay(0);
+drawClipChart();
+drawGroupChart();
+drawWeightChart();
+drawOverlongChart();
+drawAblation();
+
+window.addEventListener('resize', () => {
+  updateTrainingDisplay(currentEpoch);
+  drawClipChart();
+  drawGroupChart();
+  drawWeightChart();
+  drawOverlongChart();
+  drawAblation();
+});
+</script>
+
+</body>
+</html>

@@ -41,8 +41,9 @@
 | 033 | [投机解码进阶: Exact vs Fallback](./algorithms/speculative-decoding-advanced/) | LLM推理优化、工程权衡、分布偏差 | ⭐⭐⭐⭐⭐ |
 | 034 | [DPO 训练 MHA Transformer](./algorithms/dpo-training-mha/) | DPO、偏好优化、梯度推导、收敛性 | ⭐⭐⭐⭐⭐ |
 | 035 | [GRPO 训练 MHA Transformer](./algorithms/grpo-training-mha/) | GRPO、Group Sampling、PPO-Clip、KL约束、梯度推导 | ⭐⭐⭐⭐⭐ |
-| 036 | [单词接龙 (Word Ladder)](./algorithms/word-ladder/) | BFS、双向 BFS、图论最短路径 | ⭐⭐⭐ |
-| 037 | [Logits 采样处理器](./algorithms/logits-processor/) | Temperature、Top-k、Top-p、NumPy 工程实现 | ⭐⭐ |
+| 036 | [DAPO 训练 MHA Transformer](./algorithms/dapo-training-mha/) | DAPO 4 项改进、Clip-Higher、Dynamic Sampling、Token-Level Loss、Overlong Shaping | ⭐⭐⭐⭐⭐ |
+| 037 | [单词接龙 (Word Ladder)](./algorithms/word-ladder/) | BFS、双向 BFS、图论最短路径 | ⭐⭐⭐ |
+| 038 | [Logits 采样处理器](./algorithms/logits-processor/) | Temperature、Top-k、Top-p、NumPy 工程实现 | ⭐⭐ |
 
 ## 目录结构
 
